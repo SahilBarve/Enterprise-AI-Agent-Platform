@@ -285,3 +285,107 @@ Whenever an `async` task is scheduled or context is switched, Python automatical
    ```
    *Expected output*: Valid YAML syntax resolving all 9 services, networks, and volumes.
 
+---
+
+## [2026-10-05] Phase 1 (Slice 1.1) — Layout-Aware Document Parsing & Multi-Strategy Chunking
+
+### (a) What was done
+1. **Domain Data Models ([`libs/retrieval/models.py`](file:///d:/Projects/AI-Operations-Platform/libs/retrieval/models.py))**:
+   - Defined `DocumentMetadata` capturing mandatory `tenant_id`, `collection_id`, `doc_type`, `acl_tags`, and SHA-256 `content_hash` (FR-RAG-6, FR-RAG-7).
+   - Defined `ParsedBlock` and `ParsedDocument` representing layout components (headings with hierarchy levels, tables with column headers, paragraphs, code blocks, page numbers).
+   - Defined `Chunk` model with `parent_id`, `is_parent`, `section_path`, `page_number`, `token_count`, and `content_hash`.
+2. **Layout-Aware Multi-Format Parser ([`libs/retrieval/parser.py`](file:///d:/Projects/AI-Operations-Platform/libs/retrieval/parser.py))**:
+   - Implemented `DocumentParser` supporting Markdown, plain text, HTML (`BeautifulSoup`), CSV, and PDF (`pypdf`).
+   - Markdown parser tracks `#` heading breadcrumbs (`section_path`) and detects markdown table grids.
+   - HTML parser extracts `<title>`, headings (`h1`–`h6`), tables (`<th>`, `<tr>`, `<td>`), and `<pre>` code.
+   - CSV parser converts structured tabular data into formatted markdown table blocks with retained column headers.
+   - PDF parser extracts text page-by-page, assigning exact `page_number` provenance for downstream citations.
+   - Content hash calculation via SHA-256 on raw bytes for deduplication.
+3. **Multi-Strategy Document Chunker ([`libs/retrieval/chunker.py`](file:///d:/Projects/AI-Operations-Platform/libs/retrieval/chunker.py))**:
+   - `RECURSIVE`: Recursive character splitting using hierarchical separators (`\n\n`, `\n`, `. `, ` `) with sliding-window overlap.
+   - `HEADING_AWARE`: Groups blocks under their parent heading path to prevent crossing major topical section boundaries.
+   - `TABLE_AWARE`: Splits large tables while repeating table headers at the top of every chunk slice, ensuring row semantics are never lost.
+   - `PARENT_CHILD`: Creates large parent context chunks (`parent_chunk_size`, e.g. 2000 chars) and smaller child chunks (`chunk_size`, e.g. 500 chars) linked via `parent_id` (FR-RAG-5, FR-RAG-16).
+4. **Unit Tests & Verification**:
+   - Wrote 10 new tests in [`tests/unit/test_parser.py`](file:///d:/Projects/AI-Operations-Platform/tests/unit/test_parser.py) and [`tests/unit/test_chunker.py`](file:///d:/Projects/AI-Operations-Platform/tests/unit/test_chunker.py). Total test count increased from 27 to 37 (100% passing).
+   - Strict `mypy` and `ruff` checks passing with 0 warnings.
+
+---
+
+### (b) Why we chose this approach
+- **Structure-Preserving Parsing over Blind Extraction**: Standard RAG pipelines treat all documents as unformatted text strings. When tables or headings are flattened, critical relationship data is destroyed (e.g. an LLM cannot tell which column an entry belongs to). Our layout parser retains heading breadcrumbs (`section_path`) and table headers, allowing the retrieval engine to supply structural context to the LLM.
+- **Parent-Child Chunking**: Dense vector search works best on small, highly specific chunks (200–500 chars) where semantic signal isn't diluted. However, LLMs generate better answers when given broad surrounding context (1000–2000 chars). By storing parent-child relationships, we embed small child chunks for search accuracy, but return the broader parent chunk during synthesis.
+
+---
+
+### (c) Alternatives considered and why rejected
+- **Fixed-character windowing (`text[i:i+500]`)**:
+  - *Why rejected*: Blind windowing splits words, sentences, and table rows in half. It produces low retrieval accuracy and disjointed generation.
+- **External Unstructured API service**:
+  - *Why rejected*: Unstructured API adds external cloud latency, API key costs, and a network failure point. Pure-Python parsing using standard libraries (`pypdf`, `BeautifulSoup`, `csv`, regex) runs locally in milliseconds with zero external dependencies.
+
+---
+
+### (d) Trade-offs and risks
+- **Storage expansion in Parent-Child mode**: Storing both parent and child chunks increases text storage volume by ~1.5x. *Mitigation*: Only child chunks are vectorized and indexed in Qdrant; parent chunks are stored as payload attributes or database rows, avoiding vector RAM explosion.
+
+---
+
+### (e) Non-trivial concepts explained simply
+
+#### 1. Parent-Child (Small-to-Big) Chunking
+In traditional RAG, there is a fundamental conflict in choosing chunk size:
+- **Small chunks (e.g., 200 chars)**: High embedding precision (the vector is focused on a single fact), but poor context for generation (the LLM cannot understand the broader paragraph).
+- **Large chunks (e.g., 2000 chars)**: Rich context for generation, but diluted embedding precision (the vector averages many different topics, causing retrieval misses).
+
+**The Solution: Small-to-Big Retrieval**:
+```
+┌────────────────────────────────────────────────────────┐
+│ Parent Chunk (2000 chars) - ID: "p-101"                │
+│ ┌───────────────────┐ ┌───────────────────┐            │
+│ │ Child Chunk A     │ │ Child Chunk B     │  ...       │
+│ │ (Embedded vector) │ │ (Embedded vector) │            │
+│ └───────────────────┘ └───────────────────┘            │
+└────────────────────────────────────────────────────────┘
+```
+1. Embed and index only **Child Chunks** in Qdrant.
+2. When the user asks a question, Qdrant retrieves Child Chunk A with high precision.
+3. Before passing context to the LLM, the retrieval engine resolves `parent_id = "p-101"` and injects the complete **Parent Chunk** into the prompt.
+
+#### 2. Table-Aware Chunking with Header Repetition
+Consider a Markdown table of server latencies:
+```markdown
+| Region | p50 (ms) | p99 (ms) | Cost ($) |
+| --- | --- | --- | --- |
+| us-east-1 | 12 | 45 | 120 |
+... (20 rows later) ...
+| ap-south-1 | 18 | 62 | 95 |
+```
+If a naive chunker cuts this table in half, Chunk 2 contains:
+```markdown
+| ap-south-1 | 18 | 62 | 95 |
+```
+An LLM reading Chunk 2 has no idea whether `18` is latency, CPU utilization, or price!
+Our [`_chunk_table_aware`](file:///d:/Projects/AI-Operations-Platform/libs/retrieval/chunker.py) detects table blocks and prepends the original header row:
+```markdown
+| Region | p50 (ms) | p99 (ms) | Cost ($) |
+| --- | --- | --- | --- |
+| ap-south-1 | 18 | 62 | 95 |
+```
+This guarantees that tabular chunks remain fully interpretable to embedding models and LLMs.
+
+---
+
+### (f) How to verify it works
+1. Run parser and chunker unit tests:
+   ```bash
+   .\.venv\Scripts\pytest.exe tests/unit/test_parser.py tests/unit/test_chunker.py -v
+   ```
+   *Expected output*: 10 passed in <0.2s.
+2. Run full unit test suite:
+   ```bash
+   .\.venv\Scripts\pytest.exe tests/unit -v
+   ```
+   *Expected output*: 37 passed.
+
+

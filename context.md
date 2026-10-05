@@ -53,10 +53,10 @@ ai-ops-platform/
 - [ ] **Phase 11: Stretch** (Playbooks, Slack bot, chaos tests)
 
 ## Current Status
-- **Phase**: Phase 0 — Foundation (COMPLETE) -> Ready for Phase 1
-- **Done**: Phase 0 complete: Monorepo layout, Python 3.11+ packaging (`pyproject.toml`), `ruff` linter/formatter, `mypy` strict type checking, foundation library [`libs/common`](file:///d:/Projects/AI-Operations-Platform/libs/common) (`config`, `errors`, `logging`, `telemetry`, `health`), API Gateway service foundation [`services/gateway`](file:///d:/Projects/AI-Operations-Platform/services/gateway) with `/healthz`, `/readyz`, `/metrics`, and RFC 7807 problem details handlers. Full local infrastructure stack in `docker-compose.yml` (Postgres 16, Redis 7, RabbitMQ 3.13, Qdrant 1.11, MinIO, OTel Collector, Prometheus, Grafana). 27 unit tests passing with 96% test coverage. GitHub Actions CI pipeline skeleton configured.
-- **In Progress**: Completed Phase 0 exit criteria. Awaiting go-ahead for Phase 1 Core RAG.
-- **Next**: Phase 1 Core RAG: Document ingestion pipeline (parsing, parent-child chunking), Qdrant hybrid retrieval (dense + sparse BM25 vectors), Reciprocal Rank Fusion (RRF), cross-encoder reranking, citation mapping, and early eval harness (Ragas/DeepEval golden set skeleton).
+- **Phase**: Phase 1 — Core RAG [IN PROGRESS]
+- **Done**: Phase 0 Foundation complete. Slice 1.1 complete: DocumentParser ([`libs/retrieval/parser.py`](file:///d:/Projects/AI-Operations-Platform/libs/retrieval/parser.py)) supporting TXT, MD, HTML, CSV, PDF with layout preservation; DocumentChunker ([`libs/retrieval/chunker.py`](file:///d:/Projects/AI-Operations-Platform/libs/retrieval/chunker.py)) supporting Recursive, Heading-aware, Table-aware, and Parent-Child small-to-big chunking with SHA-256 dedup. 37 unit tests passing with 91% test coverage.
+- **In Progress**: Slice 1.2: Dense & sparse BM25 embeddings and Qdrant hybrid collection indexing ([`libs/retrieval/embeddings.py`](file:///d:/Projects/AI-Operations-Platform/libs/retrieval/embeddings.py), [`libs/retrieval/sparse.py`](file:///d:/Projects/AI-Operations-Platform/libs/retrieval/sparse.py), [`libs/retrieval/indexer.py`](file:///d:/Projects/AI-Operations-Platform/libs/retrieval/indexer.py)).
+- **Next**: Slice 1.3: Hybrid retrieval, Reciprocal Rank Fusion (RRF), cross-encoder reranking, and parent context expansion.
 
 ## Known Gaps
 - None.
