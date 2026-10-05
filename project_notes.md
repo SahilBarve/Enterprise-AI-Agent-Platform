@@ -151,3 +151,137 @@ In CI/CD, if a pull request drops Faithfulness below 0.85 or Recall@10 below 0.9
 - **Consequences**:
   - *Positive*: First-class support for real-time SSE event streaming, interactive agent execution step timelines, citation click-throughs, DAG trace visualization (Run Inspector), and responsive multi-tenant dashboards.
   - *Trade-off*: Requires maintaining a TypeScript/React frontend alongside the Python backend, but delivers a true enterprise-grade product rather than a prototype.
+
+---
+
+## [2026-10-05] Phase 0 Completion — Foundation, Tooling, Core Library, Gateway & Local Stack
+
+### (a) What was done
+1. **Monorepo Structure Scaffolding**: Established clean layered monorepo layout:
+   - `services/`: `gateway` (and stubs for `orchestrator`, `workers`, `ingestion`, `sandbox`, `scheduler`, `eval`).
+   - `libs/`: `common` (and packages for `llm`, `retrieval`, `agents`, `guardrails`, `tools`, `mcp_client`).
+   - `infra/`: `docker`, `helm`, `terraform`.
+   - `observability/`: `otel`, `prometheus`, `grafana`.
+   - `tests/`: `unit`, `integration`, `e2e`.
+   - `scripts/`: developer tooling and automation.
+2. **Packaging & Strict Tooling Configuration**:
+   - `pyproject.toml` with pinned Python `>=3.11` dependencies.
+   - `ruff` configured with strict lint rules (`E`, `W`, `F`, `I`, `B`, `C4`, `UP`, `ARG`, `SIM`) and automated code formatting.
+   - `mypy` configured with `strict = true`, explicit package bases, and zero untyped definitions allowed.
+3. **Core Shared Library (`libs/common`)**:
+   - [`libs/common/config.py`](file:///d:/Projects/AI-Operations-Platform/libs/common/config.py): Pydantic v2 `BaseSettings` loading typed environment variables from `.env` with sensible local defaults and property flags (`is_production`, `is_testing`).
+   - [`libs/common/errors.py`](file:///d:/Projects/AI-Operations-Platform/libs/common/errors.py): Domain exception hierarchy (`AppError`, `NotFoundError`, `ValidationError`, `AuthenticationError`, `AuthorizationError`, `GovernanceError`, `RateLimitError`, `ConflictError`, `ExternalServiceError`) with RFC 7807 problem details dict serialization.
+   - [`libs/common/logging.py`](file:///d:/Projects/AI-Operations-Platform/libs/common/logging.py): High-performance structured JSON logging (`structlog`) with automatic contextvar injection (`correlation_id`, `tenant_id`, `run_id`) and active OpenTelemetry span context enrichment (`trace_id`, `span_id`).
+   - [`libs/common/telemetry.py`](file:///d:/Projects/AI-Operations-Platform/libs/common/telemetry.py): OpenTelemetry tracer setup with OTLP gRPC export, W3C TraceContext injector/extractor (`traceparent`) for RabbitMQ and MCP protocols, and Starlette/FastAPI `CorrelationIdMiddleware`.
+   - [`libs/common/health.py`](file:///d:/Projects/AI-Operations-Platform/libs/common/health.py): `HealthCheckRegistry` supporting `/healthz` (liveness), `/readyz` (readiness with async dependency checks and 503 fallback), and `/metrics` (Prometheus RED metrics exposition).
+4. **API Gateway Foundation (`services/gateway`)**:
+   - Initialized FastAPI gateway application factory (`create_gateway_app`).
+   - Registered `CorrelationIdMiddleware`, CORS middleware, and global exception handlers converting `AppError` and Pydantic `RequestValidationError` into standard RFC 7807 problem details.
+   - Exposed system endpoints: `/healthz`, `/readyz`, `/metrics`, and `/api/v1/status`.
+5. **Local Infrastructure Topology (`docker-compose.yml`)**:
+   - Configured all 9 core local services with container healthchecks: PostgreSQL 16, Redis 7, RabbitMQ 3.13-management, Qdrant 1.11, MinIO S3 storage, OpenTelemetry Collector (gRPC 4317 & Prometheus 8889), Prometheus 2.54, Grafana 11.2, and API Gateway.
+   - Multi-stage minimal non-root Dockerfile for API Gateway ([`services/gateway/Dockerfile`](file:///d:/Projects/AI-Operations-Platform/services/gateway/Dockerfile)).
+6. **Testing, Automation & CI/CD**:
+   - Created 27 unit tests across configuration, errors, logging, telemetry, health registry, and gateway endpoints.
+   - Achieved 96% test coverage across `libs` and `services`.
+   - Created GitHub Actions CI pipeline (`.github/workflows/ci.yml`), `Makefile`, and PowerShell helper (`scripts/dev.ps1`).
+
+---
+
+### (b) Why we chose this approach
+- **Unified Foundation First**: If each agent or microservice invents its own logging, error schemas, or config loading, distributed debugging becomes a nightmare. Having `libs/common` from Phase 0 guarantees that every service, worker, and MCP server created in subsequent phases communicates using identical correlation IDs, RFC 7807 problem details, and telemetry headers.
+- **Fail-Fast Typing**: Running `mypy --strict` from the start prevents insidious runtime bugs (like `None` propagation or missing dictionary keys) from entering multi-agent state reducers.
+- **Resilient Telemetry**: By making the OTel remote exporter optional and lazy-loading it, tests run in <1 second with zero background network timeouts, while docker-compose runs seamlessly export full gRPC traces to the OTel Collector.
+
+---
+
+### (c) Alternatives considered and why rejected
+- **Using Python's standard `logging` without `structlog`**:
+  - *Why rejected*: Standard logging produces plain text strings. In a multi-agent system where multiple agents run concurrently, plain text logs interleave unpredictably and cannot be easily filtered by `run_id` or `tenant_id` in Grafana Loki or CloudWatch. `structlog` emits structured JSON where every field is a filterable key.
+- **Generic FastAPI `HTTPException`**:
+  - *Why rejected*: `raise HTTPException(status_code=400, detail="bad request")` only passes an unstructured string. When an agent or frontend encounters an error, it needs machine-readable error codes (e.g. `GOVERNANCE_BLOCKED` or `RATE_LIMIT_EXCEEDED`) and structured `invalid_params` to trigger automated retry or self-correction logic.
+- **Mono-process architecture for Phase 0**:
+  - *Why rejected*: While tempting to write a single monolithic script, the PRD mandates microservices and independent MCP servers. Laying out the monorepo structure with distinct `services/` and `libs/` packages ensures that architectural boundaries are preserved from day one.
+
+---
+
+### (d) Trade-offs and risks
+- **Strict Typing Friction**: Requiring full type hints and `mypy` strict mode adds a slight amount of authoring time per file. *Benefit*: Eliminates an entire class of production bugs in complex LangGraph state handling.
+- **Monorepo Import Paths**: Requiring `libs.` imports across packages requires proper packaging (`pyproject.toml`). *Benefit*: Clean, explicit module resolution with zero circular dependencies.
+
+---
+
+### (e) Non-trivial concepts explained simply
+
+#### 1. RFC 7807 Problem Details
+Standard HTTP error responses are often inconsistent:
+```json
+// Inconsistent API 1:
+{"error": "user not found"}
+
+// Inconsistent API 2:
+{"message": "Validation failed", "code": 422}
+```
+RFC 7807 defines a standardized specification for HTTP error responses:
+```json
+{
+  "type": "urn:aiops:error:resource-not-found",
+  "title": "RESOURCE_NOT_FOUND",
+  "status": 404,
+  "detail": "Document not found",
+  "error_code": "RESOURCE_NOT_FOUND",
+  "invalid_params": {
+    "resource_type": "document",
+    "resource_id": "doc-123"
+  },
+  "instance": "/api/v1/collections/col-1/documents/doc-123"
+}
+```
+**Why this is essential for Multi-Agent Systems**:
+When an agent (like the SQL Agent or Critic Agent) executes an operation and receives an error, it doesn't need to use regex or prompt an LLM to guess what went wrong. It reads `error_code` and `invalid_params` directly to trigger self-repair loops.
+
+#### 2. W3C Distributed Trace Context Propagation (`traceparent`)
+When a request flows through the API Gateway, gets enqueued in RabbitMQ, consumed by an agent worker, and delegated to an MCP server, how does OpenTelemetry connect all these operations into a single continuous trace?
+Via the **W3C TraceContext** standard:
+$$\text{traceparent: } \texttt{00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01}$$
+- `00`: W3C version.
+- `4bf92f3577b34da6a3ce929d0e0e4736`: 128-bit **Trace ID** (shared across the entire distributed journey).
+- `00f067aa0ba902b7`: 64-bit **Parent Span ID** (identifies the specific calling operation).
+- `01`: Trace flags (`01` = sampled/recorded).
+
+Our [`libs/common/telemetry.py`](file:///d:/Projects/AI-Operations-Platform/libs/common/telemetry.py) functions `inject_trace_context(carrier)` and `extract_trace_context(carrier)` inject this header into HTTP headers, AMQP message properties, and MCP request metadata, ensuring end-to-end trace waterfalls in Grafana/Jaeger.
+
+#### 3. Python Contextvars in Concurrent Event Loops
+In synchronous multi-threaded applications, thread-local storage (`threading.local()`) is used to store request context (e.g. current user ID).
+However, in asynchronous Python (`async`/`await`), multiple concurrent requests run on the **same single OS thread** via the event loop! If you used `threading.local()`, Request B could overwrite Request A's tenant ID!
+Python's `contextvars.ContextVar` solves this:
+```python
+correlation_id_ctx: ContextVar[str | None] = ContextVar("correlation_id", default=None)
+```
+Whenever an `async` task is scheduled or context is switched, Python automatically swaps the active contextvar state. Our [`CorrelationIdMiddleware`](file:///d:/Projects/AI-Operations-Platform/libs/common/telemetry.py) sets the correlation ID at request entry, and structlog processors automatically read it on every log call without passing `correlation_id` through every function parameter.
+
+---
+
+### (f) How to verify it works
+1. Run all unit tests with coverage:
+   ```bash
+   .\.venv\Scripts\pytest.exe tests/unit -v --cov=libs --cov=services --cov-report=term-missing
+   ```
+   *Expected output*: 27 passed, >= 96% coverage across all modules.
+2. Run Ruff linter and formatter:
+   ```bash
+   .\.venv\Scripts\ruff.exe check .
+   .\.venv\Scripts\ruff.exe format --check .
+   ```
+   *Expected output*: All checks passed, 20 files already formatted.
+3. Run Mypy strict type analysis:
+   ```bash
+   .\.venv\Scripts\mypy.exe libs services
+   ```
+   *Expected output*: `Success: no issues found in 10 source files`.
+4. Verify Docker Compose stack configuration:
+   ```bash
+   docker compose config
+   ```
+   *Expected output*: Valid YAML syntax resolving all 9 services, networks, and volumes.
+

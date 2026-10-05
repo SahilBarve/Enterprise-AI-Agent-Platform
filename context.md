@@ -37,7 +37,7 @@ ai-ops-platform/
 - Linting & type checking: `ruff check .` && `ruff format --check .` && `mypy libs services`
 
 ## Delivery Roadmap & Phase Checklist
-- [ ] **Phase 0: Foundation** (Repo, tooling, config, docker-compose, libs/common, health/readiness, OTel base) -> **IN PROGRESS**
+- [x] **Phase 0: Foundation** (Repo, tooling, config, docker-compose, libs/common, health/readiness, OTel base)
 - [ ] **Phase 1: Core RAG** (Ingestion, hybrid search Qdrant dense+sparse, reranker, citations, eval plumbing)
 - [ ] **Phase 2: Optimization** (Two-tier semantic cache, context compression, token budgeter, adaptive CRAG)
 - [ ] **Phase 3: Orchestration & Governance** (LangGraph supervisor, Postgres checkpointer, interrupt HITL, signed approval tokens, run lifecycle)
@@ -51,10 +51,10 @@ ai-ops-platform/
 - [ ] **Phase 11: Stretch** (Playbooks, Slack bot, chaos tests)
 
 ## Current Status
-- **Phase**: Phase 0 — Foundation
-- **Done**: Step 0 complete (PRD analyzed, `context.md` & `project_notes.md` initialized, all 7 open decisions resolved via ADR-001 through ADR-007: aio-pika, self-hosted Langfuse + OTel, self-hosted RabbitMQ + K8s operator, self-hosted Qdrant, isolated sandbox service, OpenAI primary + Ollama fallback, Next.js frontend).
-- **In Progress**: Ready to execute Phase 0 Foundation scaffolding.
-- **Next**: Phase 0 implementation: monorepo scaffolding, Python packaging & tooling configuration (ruff, mypy, pytest), `libs/common` (config, logging, errors, OTel base), health/readiness endpoints, and `docker-compose.yml` local infrastructure stack.
+- **Phase**: Phase 0 — Foundation (COMPLETE) -> Ready for Phase 1
+- **Done**: Phase 0 complete: Monorepo layout, Python 3.11+ packaging (`pyproject.toml`), `ruff` linter/formatter, `mypy` strict type checking, foundation library [`libs/common`](file:///d:/Projects/AI-Operations-Platform/libs/common) (`config`, `errors`, `logging`, `telemetry`, `health`), API Gateway service foundation [`services/gateway`](file:///d:/Projects/AI-Operations-Platform/services/gateway) with `/healthz`, `/readyz`, `/metrics`, and RFC 7807 problem details handlers. Full local infrastructure stack in `docker-compose.yml` (Postgres 16, Redis 7, RabbitMQ 3.13, Qdrant 1.11, MinIO, OTel Collector, Prometheus, Grafana). 27 unit tests passing with 96% test coverage. GitHub Actions CI pipeline skeleton configured.
+- **In Progress**: Completed Phase 0 exit criteria. Awaiting go-ahead for Phase 1 Core RAG.
+- **Next**: Phase 1 Core RAG: Document ingestion pipeline (parsing, parent-child chunking), Qdrant hybrid retrieval (dense + sparse BM25 vectors), Reciprocal Rank Fusion (RRF), cross-encoder reranking, citation mapping, and early eval harness (Ragas/DeepEval golden set skeleton).
 
 ## Known Gaps
 - None.
