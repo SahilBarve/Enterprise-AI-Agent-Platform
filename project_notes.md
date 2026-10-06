@@ -561,6 +561,86 @@ If Candidate B is highly relevant, but has 90% word overlap with Candidate A (wh
    ```
    *Expected output*: 55 passed.
 
+---
+
+## [2026-10-06] Phase 1 (Slice 1.4) — Citation Engine, Grounded Answer Generation & Refusal Behavior
+
+### (a) What was done
+1. **Citation Engine ([`libs/retrieval/citations.py`](file:///d:/Projects/AI-Operations-Platform/libs/retrieval/citations.py))**:
+   - Implemented `Citation` model capturing exact chunk ID, document UUID, page number, section breadcrumbs, and passage excerpt (FR-RAG-26).
+   - `CitationEngine.format_context`: Structures retrieved chunks into numbered `[Source N]` context blocks for the LLM prompt.
+   - `CitationEngine.extract_citations`: Extracts inline bracketed citations (`[1]`, `[2]`, `[1, 2]`) and correlates them back to source provenance objects while detecting hallucinated or unmapped references (`unmapped_citations`).
+   - `CitationEngine.is_refusal`: Detects insufficient evidence responses (`"I don't know based on the provided documents"`, etc.) satisfying FR-RAG-28.
+   - `CitationEngine.verify_groundedness`: Sentence-by-sentence claim validation evaluating lexical grounding ratios against cited excerpts; flags unsupported statements (`unsupported_claims`) and returns calibrated confidence score (FR-RAG-27).
+2. **Provider-Agnostic LLM Layer ([`libs/llm/provider.py`](file:///d:/Projects/AI-Operations-Platform/libs/llm/provider.py))**:
+   - Defined `LLMProvider` protocol, `LLMMessage`, and `LLMResponse`.
+   - Built `MockLLMProvider` for deterministic testing with zero network overhead.
+   - Built `LiteLLMProvider` for multi-provider routing (OpenAI, Anthropic, Bedrock, Ollama) with automated fallback.
+3. **End-to-End Grounded Answer Generator ([`libs/retrieval/generator.py`](file:///d:/Projects/AI-Operations-Platform/libs/retrieval/generator.py))**:
+   - Implemented `RAGGenerator` orchestrating hybrid retrieval -> cross-encoder rerank -> context assembly -> prompt synthesis -> citation extraction & groundedness verification.
+   - Implemented explicit guard: when no candidates exist or all fall below `min_relevance`, returns standard refusal with `is_refusal=True` and confidence 1.0 (FR-RAG-28).
+4. **Unit Tests & Verification**:
+   - Created [`tests/unit/test_citations.py`](file:///d:/Projects/AI-Operations-Platform/tests/unit/test_citations.py) (4 tests) and [`tests/unit/test_generator.py`](file:///d:/Projects/AI-Operations-Platform/tests/unit/test_generator.py) (2 tests).
+   - Total test count expanded from 55 to 61 (100% passing).
+   - Mypy strict and Ruff checks pass cleanly across all 39 source files.
+
+---
+
+### (b) Why we chose this approach
+- **Strict Grounding over Unconstrained Generation**: Enterprise operations cannot tolerate hallucinations. If an agent answers a question about deployment policy or database replicas with plausible-sounding fiction, systems break. By forcing the LLM into a numbered source format and validating citations sentence-by-sentence, every claim in the generated answer is verifiable.
+- **Explicit "I Don't Know" Fallback**: When retrieval fails to find relevant chunks or scores are below minimum thresholds, forcing an LLM to generate an answer inevitably creates hallucinated filler. Short-circuiting directly to a refusal preserves system integrity and informs supervisory agents that alternative research (e.g. web search) is required.
+
+---
+
+### (c) Alternatives considered and why rejected
+- **Relying solely on LLM self-attestation for citations**:
+  - *Why rejected*: LLMs frequently hallucinate nonexistent citation numbers (`[5]` when only 2 sources were provided). Our `CitationEngine` explicitly parses every `[N]` reference, cross-checks it against the candidate set, and flags unmapped citations.
+- **Hardcoding OpenAI API directly**:
+  - *Why rejected*: Violates the PRD's provider-agnostic and local Ollama fallback requirements. The `LLMProvider` protocol enables seamless swapping between cloud LLMs and local runtimes with zero code changes.
+
+---
+
+### (d) Trade-offs and risks
+- **Sentence-level token overlap for groundedness**: Pure token overlap is computationally cheap (<1ms), but can occasionally miss subtle semantic contradictions. *Mitigation*: In Phase 8, we will augment this with formal DeepEval/Ragas NLI judge models as an offline evaluation gate.
+
+---
+
+### (e) Non-trivial concepts explained simply
+
+#### 1. Inline Citation Mapping & Provenance Graph
+When an answer states:
+> *"Microservices communicate over gRPC [1] and require signed HMAC tokens for mutations [2]."*
+
+The frontend or user needs to click `[1]` and see:
+- Document: `Architecture_Spec.pdf`
+- Page: 3
+- Section: `Architecture > Observability`
+- Exact excerpt text from the original PDF chunk.
+
+Our `CitationEngine` bridges the generated text with the database chunk by numbering candidates `[Source 1]`, `[Source 2]`, parsing the generated brackets, and emitting structured `Citation` objects alongside the text.
+
+#### 2. Hallucination Detection & Claim Grounding
+A generated answer consists of individual claims $S_1, S_2, \dots, S_n$.
+For each claim $S_i$:
+1. Extract the cited source $C_k$.
+2. Verify that informative tokens in $S_i$ are present in $C_k$'s excerpt.
+3. If token coverage is $< 0.5$, flag $S_i$ in `unsupported_claims` and reduce the answer's `confidence_score`.
+
+---
+
+### (f) How to verify it works
+1. Run citation engine and generator tests:
+   ```bash
+   .\.venv\Scripts\pytest.exe tests/unit/test_citations.py tests/unit/test_generator.py -v
+   ```
+   *Expected output*: 6 passed in <1.5s.
+2. Run full test suite:
+   ```bash
+   .\.venv\Scripts\pytest.exe tests/unit -v
+   ```
+   *Expected output*: 61 passed.
+
+
 
 
 

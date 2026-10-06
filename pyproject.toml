@@ -99,6 +99,7 @@ module = [
     "structlog.*",
     "fastembed.*",
     "sentence_transformers.*",
+    "litellm.*",
 ]
 ignore_missing_imports = true
 

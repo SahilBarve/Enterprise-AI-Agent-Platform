@@ -54,9 +54,9 @@ ai-ops-platform/
 
 ## Current Status
 - **Phase**: Phase 1 — Core RAG [IN PROGRESS]
-- **Done**: Phase 0 Foundation complete. Slice 1.1 (Parser & Chunker), Slice 1.2 (Embeddings & Qdrant Indexer), and Slice 1.3 (Hybrid Retrieval & Reranker) complete: `HybridRetriever` ([`libs/retrieval/hybrid.py`](file:///d:/Projects/AI-Operations-Platform/libs/retrieval/hybrid.py)) implementing RRF fusion ($k=60$), tenant filtering, and parent context expansion; `CrossEncoderReranker` ([`libs/retrieval/reranker.py`](file:///d:/Projects/AI-Operations-Platform/libs/retrieval/reranker.py)) with score thresholding and MMR diversity re-selection. 55 unit tests passing.
-- **In Progress**: Slice 1.4: Inline citation engine & grounded answer generation ([`libs/retrieval/citations.py`](file:///d:/Projects/AI-Operations-Platform/libs/retrieval/citations.py), [`libs/retrieval/generator.py`](file:///d:/Projects/AI-Operations-Platform/libs/retrieval/generator.py)).
-- **Next**: Slice 1.5: Evaluation harness golden dataset baseline; Slice 1.6: Ingestion & search API endpoints.
+- **Done**: Phase 0 Foundation complete. Slices 1.1–1.4 complete: `HybridRetriever` with RRF & parent expansion, `CrossEncoderReranker` with MMR, `CitationEngine` ([`libs/retrieval/citations.py`](file:///d:/Projects/AI-Operations-Platform/libs/retrieval/citations.py)) for [N] bracketed citations and claim groundedness checking, and `RAGGenerator` ([`libs/retrieval/generator.py`](file:///d:/Projects/AI-Operations-Platform/libs/retrieval/generator.py)) with LLM provider abstraction ([`libs/llm/provider.py`](file:///d:/Projects/AI-Operations-Platform/libs/llm/provider.py)) and "I don't know" fallback (FR-RAG-28). 61 unit tests passing.
+- **In Progress**: Slice 1.5: Evaluation harness plumbing & golden dataset baseline (`evals/datasets/golden_rag.json`, `evals/metrics.py`, `evals/runner.py` measuring Recall@10, MRR, Hit Rate).
+- **Next**: Slice 1.6: Gateway Ingestion & Search API Endpoints (`POST /collections`, `POST /documents`, `POST /search`, `POST /query`).
 
 ## Known Gaps
 - None.
