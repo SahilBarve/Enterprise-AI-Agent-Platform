@@ -98,6 +98,7 @@ module = [
     "prometheus_client.*",
     "structlog.*",
     "fastembed.*",
+    "sentence_transformers.*",
 ]
 ignore_missing_imports = true
 

@@ -465,5 +465,102 @@ Every worker or server calculates the identical index for any word instantly, wi
    ```
    *Expected output*: 46 passed, 90% coverage.
 
+---
+
+## [2026-10-06] Phase 1 (Slice 1.3) — Hybrid Retrieval, Reciprocal Rank Fusion, Cross-Encoder Reranker & Parent Expansion
+
+### (a) What was done
+1. **Reciprocal Rank Fusion (RRF) Implementation ([`libs/retrieval/hybrid.py`](file:///d:/Projects/AI-Operations-Platform/libs/retrieval/hybrid.py))**:
+   - Implemented `calculate_rrf_score` using the standard rank fusion formula:
+     $$\text{RRF}(d) = \sum_{m \in \{\text{dense}, \text{sparse}\}} \frac{w_m}{k + \text{rank}_m(d)}$$
+     with configurable smoothing parameter $k$ (default 60) and modality weights ($w_{\text{dense}}$, $w_{\text{sparse}}$).
+2. **Hybrid Retriever with Tenant Filtering ([`libs/retrieval/hybrid.py`](file:///d:/Projects/AI-Operations-Platform/libs/retrieval/hybrid.py))**:
+   - `HybridRetriever` performs concurrent queries against Qdrant using `query_points`:
+     - Dense search on named vector `"dense"` with cosine distance.
+     - Sparse search on named vector `"sparse"` with BM25 term weights.
+   - Enforces pre-retrieval filtering (`_build_filter`) with mandatory `tenant_id` and exclusion of container parent chunks (`is_parent=False`).
+   - Merges results using RRF and populates `SearchResult` models with dense and sparse rank provenance.
+   - Implemented **Parent Context Expansion (FR-RAG-16)**: automatically batch-retrieves parent container chunks from Qdrant by ID and populates `expanded_content`, providing wide contextual windows to downstream LLMs.
+3. **Cross-Encoder Reranker & MMR Diversity ([`libs/retrieval/reranker.py`](file:///d:/Projects/AI-Operations-Platform/libs/retrieval/reranker.py))**:
+   - Implemented `CrossEncoderReranker` supporting both `sentence_transformers.CrossEncoder` and an ultra-fast deterministic fallback scorer analyzing unigram coverage, bigram overlap, and exact phrase proximity.
+   - Score threshold filtering (`min_score`) to drop irrelevant candidate chunks.
+   - **Maximal Marginal Relevance (MMR) Re-Selection (FR-RAG-15)**: penalizes candidate chunks that have high token Jaccard redundancy with already selected chunks, ensuring diverse top-$K$ contexts.
+4. **Unit Tests & Verification**:
+   - Created [`tests/unit/test_hybrid.py`](file:///d:/Projects/AI-Operations-Platform/tests/unit/test_hybrid.py) (5 tests) and [`tests/unit/test_reranker.py`](file:///d:/Projects/AI-Operations-Platform/tests/unit/test_reranker.py) (4 tests).
+   - Total test count expanded from 46 to 55 (100% passing).
+   - Strict `mypy` and `ruff` checks passing with 0 errors across 34 source files.
+
+---
+
+### (b) Why we chose this approach
+- **Reciprocal Rank Fusion over Score Normalization**: Dense cosine similarities (e.g. 0.72) and sparse BM25 scores (e.g. 14.8) operate on completely different numerical scales and distributions. Standard min-max normalization is extremely sensitive to outlier scores and varying document lengths. RRF is scale-invariant because it operates purely on **ranks** (1st, 2nd, 3rd) rather than raw magnitudes.
+- **Two-Stage Retrieval (Retrieve-then-Rerank)**: Bi-encoders (dense/sparse) are fast ($O(1)$ indexed lookup) but evaluate query and document independently. Cross-encoders examine the full interaction of query and document tokens ($O(N \cdot M)$ full attention), providing superior ranking accuracy. Reranking top-40 candidates down to top-8 gives the speed of bi-encoders with the precision of cross-encoders.
+- **MMR Diversity**: When retrieving from long technical documents, multiple adjacent chunks often contain repetitive boilerplate or similar sentences. MMR prevents the prompt context window from being flooded with redundant duplicates, leaving room for diverse factual evidence.
+
+---
+
+### (c) Alternatives considered and why rejected
+- **Direct linear score combination ($\alpha \cdot \text{dense} + (1-\alpha) \cdot \text{sparse}$)**:
+  - *Why rejected*: BM25 scores are unbounded and change drastically depending on document collection size, while cosine scores lie between -1 and 1. Direct weighted sums require constant tuning of scale factors per collection. RRF works out-of-the-box across all collections without calibration.
+- **Reranking all chunks directly with Cross-Encoder**:
+  - *Why rejected*: Cross-encoders cannot be pre-indexed into a vector database because every query-document pair must pass through the transformer together. Running a cross-encoder across thousands of chunks per query would take seconds and destroy system latency.
+
+---
+
+### (d) Trade-offs and risks
+- **Latency of Two-Stage Pipeline**: Querying Qdrant twice (dense + sparse) and running a reranker adds additional pipeline stages. *Mitigation*: Qdrant queries execute against the same local/remote cluster in single-digit milliseconds; fallback cross-scoring takes <1ms, and neural rerankers are restricted to top 40 candidates with batched inference.
+
+---
+
+### (e) Non-trivial concepts explained simply
+
+#### 1. Reciprocal Rank Fusion (RRF)
+Suppose we search for *"PostgreSQL read replica lag"* and get these ranked lists:
+- **Dense Vector Search**:
+  1. Doc A (High semantic similarity)
+  2. Doc B
+  3. Doc C
+- **Sparse BM25 Search**:
+  1. Doc C (Exact token match for "lag")
+  2. Doc D
+  3. Doc A
+
+With standard RRF parameter $k = 60$:
+$$\text{RRF}(\text{Doc A}) = \frac{1}{60 + 1} + \frac{1}{60 + 3} = \frac{1}{61} + \frac{1}{63} \approx 0.01639 + 0.01587 = \mathbf{0.03226}$$
+$$\text{RRF}(\text{Doc C}) = \frac{1}{60 + 3} + \frac{1}{60 + 1} = \frac{1}{63} + \frac{1}{61} \approx 0.01587 + 0.01639 = \mathbf{0.03226}$$
+$$\text{RRF}(\text{Doc B}) = \frac{1}{60 + 2} + 0 = \frac{1}{62} \approx \mathbf{0.01613}$$
+
+Notice that Doc A and Doc C, which appear near the top of **both** lists, get roughly double the score of Doc B, which only appeared in one list. Documents supported by multiple retrieval modalities rise to the top!
+
+#### 2. Bi-Encoder vs. Cross-Encoder
+- **Bi-Encoder (Embedding Models)**:
+  $$\text{Query} \rightarrow \text{Model} \rightarrow \mathbf{v}_q$$
+  $$\text{Document} \rightarrow \text{Model} \rightarrow \mathbf{v}_d$$
+  $$\text{Score} = \cos(\mathbf{v}_q, \mathbf{v}_d)$$
+  The query and document never see each other until the final dot product. Fast, but misses fine-grained token-to-token semantic interactions.
+- **Cross-Encoder (Rerankers)**:
+  $$[\text{Query}, \text{Document}] \rightarrow \text{Transformer (Full Attention)} \rightarrow \text{Score}$$
+  Every token in the query attends directly to every token in the document. It catches subtle negation, modifiers, and exact context matches that bi-encoders miss.
+
+#### 3. Maximal Marginal Relevance (MMR)
+When selecting the next chunk $d_i$ to include in the context:
+$$\text{MMR}(d_i) = \lambda \cdot \text{Score}(q, d_i) - (1 - \lambda) \cdot \max_{d_j \in \text{Selected}} \text{Sim}(d_i, d_j)$$
+If Candidate B is highly relevant, but has 90% word overlap with Candidate A (which is already selected), the redundancy penalty $(1 - \lambda) \cdot 0.9$ drops its score, allowing Candidate C (which covers a new angle of the question) to be selected instead.
+
+---
+
+### (f) How to verify it works
+1. Run hybrid retrieval and reranker unit tests:
+   ```bash
+   .\.venv\Scripts\pytest.exe tests/unit/test_hybrid.py tests/unit/test_reranker.py -v
+   ```
+   *Expected output*: 9 passed in <1.5s.
+2. Run full test suite:
+   ```bash
+   .\.venv\Scripts\pytest.exe tests/unit -v
+   ```
+   *Expected output*: 55 passed.
+
+
 
 

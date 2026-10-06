@@ -54,9 +54,9 @@ ai-ops-platform/
 
 ## Current Status
 - **Phase**: Phase 1 — Core RAG [IN PROGRESS]
-- **Done**: Phase 0 Foundation complete. Slice 1.1 (Parser & Chunker) and Slice 1.2 (Embeddings & Qdrant Hybrid Indexing) complete: `BM25SparseEncoder` ([`libs/retrieval/sparse.py`](file:///d:/Projects/AI-Operations-Platform/libs/retrieval/sparse.py)), `DenseEmbeddingModel` ([`libs/retrieval/embeddings.py`](file:///d:/Projects/AI-Operations-Platform/libs/retrieval/embeddings.py)), and `QdrantHybridIndexer` ([`libs/retrieval/indexer.py`](file:///d:/Projects/AI-Operations-Platform/libs/retrieval/indexer.py)) with dual named vectors (`dense` + `sparse`), payload indexes, and cascading deletion. 46 unit tests passing with 90% test coverage.
-- **In Progress**: Slice 1.3: Hybrid retrieval, Reciprocal Rank Fusion (RRF), cross-encoder reranking, and parent context expansion ([`libs/retrieval/hybrid.py`](file:///d:/Projects/AI-Operations-Platform/libs/retrieval/hybrid.py), [`libs/retrieval/reranker.py`](file:///d:/Projects/AI-Operations-Platform/libs/retrieval/reranker.py)).
-- **Next**: Slice 1.4: Inline citation engine & answer generation; Slice 1.5: Evaluation harness golden dataset baseline; Slice 1.6: Ingestion & search API endpoints.
+- **Done**: Phase 0 Foundation complete. Slice 1.1 (Parser & Chunker), Slice 1.2 (Embeddings & Qdrant Indexer), and Slice 1.3 (Hybrid Retrieval & Reranker) complete: `HybridRetriever` ([`libs/retrieval/hybrid.py`](file:///d:/Projects/AI-Operations-Platform/libs/retrieval/hybrid.py)) implementing RRF fusion ($k=60$), tenant filtering, and parent context expansion; `CrossEncoderReranker` ([`libs/retrieval/reranker.py`](file:///d:/Projects/AI-Operations-Platform/libs/retrieval/reranker.py)) with score thresholding and MMR diversity re-selection. 55 unit tests passing.
+- **In Progress**: Slice 1.4: Inline citation engine & grounded answer generation ([`libs/retrieval/citations.py`](file:///d:/Projects/AI-Operations-Platform/libs/retrieval/citations.py), [`libs/retrieval/generator.py`](file:///d:/Projects/AI-Operations-Platform/libs/retrieval/generator.py)).
+- **Next**: Slice 1.5: Evaluation harness golden dataset baseline; Slice 1.6: Ingestion & search API endpoints.
 
 ## Known Gaps
 - None.

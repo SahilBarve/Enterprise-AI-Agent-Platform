@@ -94,3 +94,55 @@ class Chunk(BaseModel):
     token_count: int = Field(default=0, description="Estimated token count")
     content_hash: str = Field(description="SHA-256 hash of chunk content for dedup")
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class SearchResult(BaseModel):
+    """Ranked retrieval candidate with fusion provenance and citation metadata."""
+
+    chunk_id: str
+    document_id: str
+    tenant_id: str
+    collection_id: str
+    content: str
+    expanded_content: str | None = Field(
+        default=None,
+        description="Expanded parent chunk content if small-to-big retrieval is applied",
+    )
+    score: float = Field(description="Final fusion or rerank score")
+    dense_rank: int | None = Field(default=None, description="1-indexed rank from dense search")
+    sparse_rank: int | None = Field(default=None, description="1-indexed rank from sparse search")
+    dense_score: float | None = Field(default=None, description="Raw cosine/similarity score")
+    sparse_score: float | None = Field(default=None, description="Raw BM25 score")
+    rerank_score: float | None = Field(default=None, description="Cross-encoder relevance score")
+    page_number: int = Field(default=1, description="Page number for citation")
+    section_path: list[str] = Field(default_factory=list, description="Section breadcrumbs")
+    parent_id: str | None = Field(default=None, description="Parent chunk ID if child")
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @property
+    def effective_content(self) -> str:
+        """Return expanded content if available, else original chunk content."""
+        return self.expanded_content if self.expanded_content is not None else self.content
+
+
+class RetrievalQuery(BaseModel):
+    """Parameters for hybrid retrieval execution."""
+
+    query: str = Field(description="User search or question text")
+    tenant_id: str = Field(description="Mandatory tenant isolation identifier")
+    collection_id: str = Field(description="Target Qdrant collection")
+    top_k: int = Field(default=10, description="Number of results to return after fusion/reranking")
+    dense_limit: int = Field(default=40, description="Top candidates retrieved from dense search")
+    sparse_limit: int = Field(default=40, description="Top candidates retrieved from sparse search")
+    rrf_k: int = Field(default=60, description="Reciprocal Rank Fusion smoothing parameter")
+    dense_weight: float = Field(default=1.0, description="Weight multiplier for dense RRF score")
+    sparse_weight: float = Field(default=1.0, description="Weight multiplier for sparse RRF score")
+    expand_parent: bool = Field(
+        default=False,
+        description="Whether to retrieve and substitute parent context for child chunks",
+    )
+    filter_metadata: dict[str, Any] | None = Field(
+        default=None,
+        description="Optional additional payload filters",
+    )
+
