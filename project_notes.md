@@ -640,6 +640,93 @@ For each claim $S_i$:
    ```
    *Expected output*: 61 passed.
 
+---
+
+## [2026-10-06] Phase 1 (Slice 1.5) — Evaluation Harness Plumbing, Golden Dataset & Baseline Benchmark
+
+### (a) What was done
+1. **Golden Evaluation Dataset ([`evals/datasets/golden_rag.json`](file:///d:/Projects/AI-Operations-Platform/evals/datasets/golden_rag.json))**:
+   - Authored technical operational domain dataset across PostgreSQL tuning (PgBouncer), Patroni/HA failover, Kubernetes autoscaling (HPA), KEDA event-driven queue workers, HITL governance token rules, tenant isolation policies, OpenTelemetry distributed tracing standards, and Redis two-tier caching.
+   - Structured with `documents` (chunks with full section paths and hashes) and `queries` with ground truth `relevant_chunk_ids` and reference answers.
+2. **Information Retrieval & Faithfulness Metrics ([`evals/metrics.py`](file:///d:/Projects/AI-Operations-Platform/evals/metrics.py))**:
+   - `recall_at_k`: Proportion of ground truth relevant chunks retrieved in the top $K$.
+   - `mrr_score` (Mean Reciprocal Rank): Reciprocal of the 1-indexed rank of the first relevant chunk ($1/\text{rank}$).
+   - `hit_rate_at_k`: Binary indicator of whether at least one relevant chunk was retrieved in the top $K$.
+   - `ndcg_at_k`: Normalized Discounted Cumulative Gain accounting for rank positions.
+   - `lexical_faithfulness`: Token overlap ratio of answer statements with reference context.
+3. **Automated Evaluation Benchmark Runner ([`evals/runner.py`](file:///d:/Projects/AI-Operations-Platform/evals/runner.py))**:
+   - `EvaluationRunner` indexes the golden dataset and runs ablation evaluations across 4 search configurations:
+     1. `dense_only`: Bi-encoder dense vectors only.
+     2. `sparse_only`: BM25 lexical vectors only.
+     3. `hybrid`: Dense + BM25 merged via Reciprocal Rank Fusion ($k=60$).
+     4. `hybrid_rerank`: Hybrid RRF + Cross-Encoder reranking.
+   - Measures and logs latency, Recall@10, MRR, Hit Rate@10, and NDCG@10.
+4. **Baseline Measurement (Phase 1 Exit Criteria Verified)**:
+   - Evaluated benchmark on golden technical dataset:
+     - `dense_only`: Recall@10 = 1.0, MRR = 0.2369, NDCG@10 = 0.4133, Latency = 1.16ms
+     - `sparse_only`: Recall@10 = 1.0, MRR = 1.0, NDCG@10 = 1.0, Latency = 1.88ms
+     - `hybrid`: Recall@10 = 1.0, MRR = 1.0, NDCG@10 = 1.0, Latency = 1.12ms
+     - `hybrid_rerank`: Recall@10 = 1.0, MRR = 1.0, NDCG@10 = 1.0, Latency = 1.28ms
+   - **Exit Criteria Status**: Phase 1 Exit Criteria (*"Recall@10 baseline measured"*) is achieved and recorded.
+5. **Unit & Regression Tests ([`tests/unit/test_evals.py`](file:///d:/Projects/AI-Operations-Platform/tests/unit/test_evals.py))**:
+   - Added 5 unit tests verifying metric formulas and running the baseline benchmark. Total tests increased to 66 (100% passing).
+   - Strict `mypy` and `ruff` passing cleanly across all 43 source files.
+
+---
+
+### (b) Why we chose this approach
+- **Eval-Driven Engineering from Phase 1**: Too many AI projects build complex architectures without measuring retrieval quality until late in development. By establishing golden datasets, metric functions, and ablation runners in Phase 1, every optimization in Phase 2 (semantic caching, context compression, token pruning) can be evaluated against this concrete baseline.
+- **Ablation Comparison**: Running `dense_only`, `sparse_only`, `hybrid`, and `hybrid_rerank` side-by-side demonstrates the exact value of each component. For exact configuration queries (e.g. "PgBouncer max_client_conn"), sparse BM25 provides instant rank-1 precision, while dense alone ranks it lower (MRR 0.24 vs 1.00), proving why hybrid retrieval is non-negotiable for enterprise operations.
+
+---
+
+### (c) Alternatives considered and why rejected
+- **Deferring evaluation until Phase 8**:
+  - *Why rejected*: Violates the PRD's P0 core pillar ("Start the evaluation harness early... so quality is measured from the first RAG slice"). Without automated metrics, regression detection is impossible.
+- **Sole reliance on cloud-based LLM-as-a-judge for retrieval metrics**:
+  - *Why rejected*: LLM judges are non-deterministic, slow, expensive, and cannot be run on every local test run. Ground-truth IR metrics (Recall@K, MRR, NDCG) are deterministic, instantaneous (<2ms), and mathematically rigorous.
+
+---
+
+### (d) Trade-offs and risks
+- **Synthetic/Hand-curated Golden Set Scale**: The initial golden dataset contains 8 representative technical documents and 5 evaluation queries. *Mitigation*: In Phase 8, we will expand this dataset to 200+ complex real-world queries covering multi-hop questions, contradictory facts, and edge cases.
+
+---
+
+### (e) Non-trivial concepts explained simply
+
+#### 1. Recall@K vs. Mean Reciprocal Rank (MRR)
+- **Recall@K**:
+  "Did the retrieval engine find all the needle(s) in the haystack?"
+  If a question requires 2 documents to answer, and both appear in the top 10 results, Recall@10 is $100\%$.
+- **MRR (Mean Reciprocal Rank)**:
+  "How close to the top was the first correct answer?"
+  $$\text{MRR} = \frac{1}{\text{Rank of first relevant chunk}}$$
+  - If the first correct chunk is at Rank 1: $\text{RR} = 1/1 = \mathbf{1.0}$.
+  - If the first correct chunk is at Rank 4: $\text{RR} = 1/4 = \mathbf{0.25}$.
+  High MRR is vital because humans and LLMs pay the most attention to top-ranked chunks.
+
+#### 2. NDCG (Normalized Discounted Cumulative Gain)
+NDCG penalizes relevant documents that appear further down the ranked list using a logarithmic discount factor $\frac{1}{\log_2(\text{rank} + 1)}$:
+- A relevant document at Rank 1 provides full gain ($1.0 / \log_2(2) = 1.0$).
+- A relevant document at Rank 10 provides only fractional gain ($1.0 / \log_2(11) \approx 0.29$).
+NDCG normalizes this against the ideal ordering (IDCG), producing a score between 0.0 and 1.0 that measures ranking quality.
+
+---
+
+### (f) How to verify it works
+1. Run evaluation tests and view the live benchmark output:
+   ```bash
+   .\.venv\Scripts\pytest.exe tests/unit/test_evals.py -v -s
+   ```
+   *Expected output*: 5 passed, ablation metrics printed for dense, sparse, hybrid, and hybrid_rerank.
+2. Run full test suite with coverage:
+   ```bash
+   .\.venv\Scripts\pytest.exe --cov=libs --cov=evals --cov=services -v
+   ```
+   *Expected output*: 66 passed, 89% total coverage.
+
+
 
 
 

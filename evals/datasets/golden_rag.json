@@ -1,0 +1,119 @@
+{
+  "dataset_name": "enterprise_ops_golden_v1",
+  "version": "1.0.0",
+  "description": "Golden evaluation dataset for enterprise AI operations retrieval and QA",
+  "documents": [
+    {
+      "id": "00000000-0000-0000-0000-000000000001",
+      "document_id": "doc-pg-config",
+      "tenant_id": "tenant-ops",
+      "collection_id": "eval-col",
+      "content": "PostgreSQL connection pooling configuration: PgBouncer is deployed with max_client_conn=1000 and default_pool_size=50 to prevent connection exhaustion under spiky loads.",
+      "page_number": 1,
+      "section_path": ["Database", "Connection Pooling"],
+      "content_hash": "hash_pg_1"
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000000002",
+      "document_id": "doc-pg-config",
+      "tenant_id": "tenant-ops",
+      "collection_id": "eval-col",
+      "content": "Database replication and failover: Read replicas use streaming replication with hot_standby=on. Failover is automated using Patroni with an etcd consensus cluster.",
+      "page_number": 2,
+      "section_path": ["Database", "High Availability"],
+      "content_hash": "hash_pg_2"
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000000003",
+      "document_id": "doc-k8s-autoscaling",
+      "tenant_id": "tenant-ops",
+      "collection_id": "eval-col",
+      "content": "Kubernetes Horizontal Pod Autoscaling (HPA) triggers when average pod CPU exceeds 70% or memory exceeds 80%. Target stabilization window is configured to 300 seconds.",
+      "page_number": 1,
+      "section_path": ["Compute", "Autoscaling"],
+      "content_hash": "hash_k8s_1"
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000000004",
+      "document_id": "doc-k8s-autoscaling",
+      "tenant_id": "tenant-ops",
+      "collection_id": "eval-col",
+      "content": "KEDA event-driven scaling: Worker deployments scale from 0 to 50 pods based on RabbitMQ queue backlog with a target of 100 messages per active worker pod.",
+      "page_number": 2,
+      "section_path": ["Compute", "KEDA"],
+      "content_hash": "hash_k8s_2"
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000000005",
+      "document_id": "doc-security-governance",
+      "tenant_id": "tenant-ops",
+      "collection_id": "eval-col",
+      "content": "Human-in-the-loop governance: Write operations such as DROP, UPDATE, and external webhook triggers require signed HMAC-SHA256 tokens bound to specific run IDs.",
+      "page_number": 1,
+      "section_path": ["Security", "HITL Governance"],
+      "content_hash": "hash_sec_1"
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000000006",
+      "document_id": "doc-security-governance",
+      "tenant_id": "tenant-ops",
+      "collection_id": "eval-col",
+      "content": "Tenant data isolation policy: Every vector query and database select must include a mandatory tenant_id filter. Cross-tenant queries are blocked at the gateway.",
+      "page_number": 2,
+      "section_path": ["Security", "Multi-Tenancy"],
+      "content_hash": "hash_sec_2"
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000000007",
+      "document_id": "doc-otel-observability",
+      "tenant_id": "tenant-ops",
+      "collection_id": "eval-col",
+      "content": "Distributed tracing standard: OpenTelemetry collector listens on gRPC port 4317. The X-Correlation-ID header is propagated across HTTP headers and RabbitMQ message headers.",
+      "page_number": 1,
+      "section_path": ["Observability", "Tracing"],
+      "content_hash": "hash_otel_1"
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000000008",
+      "document_id": "doc-redis-cache",
+      "tenant_id": "tenant-ops",
+      "collection_id": "eval-col",
+      "content": "Two-tier caching strategy: Tier 1 uses SHA-256 exact match hash keys; Tier 2 uses cosine similarity threshold of 0.92 for semantic question caching in Redis.",
+      "page_number": 1,
+      "section_path": ["Caching", "Two-Tier Architecture"],
+      "content_hash": "hash_red_1"
+    }
+  ],
+  "queries": [
+    {
+      "query_id": "q-1",
+      "query": "How is PgBouncer connection pooling configured for PostgreSQL?",
+      "relevant_chunk_ids": ["00000000-0000-0000-0000-000000000001"],
+      "expected_answer": "PgBouncer is configured with max_client_conn=1000 and default_pool_size=50 to prevent connection exhaustion."
+    },
+    {
+      "query_id": "q-2",
+      "query": "What triggers KEDA to scale worker pods for RabbitMQ?",
+      "relevant_chunk_ids": ["00000000-0000-0000-0000-000000000004"],
+      "expected_answer": "KEDA scales worker deployments from 0 to 50 pods based on RabbitMQ queue backlog with a target of 100 messages per pod."
+    },
+    {
+      "query_id": "q-3",
+      "query": "What security tokens are required for high-risk write operations?",
+      "relevant_chunk_ids": ["00000000-0000-0000-0000-000000000005"],
+      "expected_answer": "Write operations require signed HMAC-SHA256 approval tokens bound to specific run IDs."
+    },
+    {
+      "query_id": "q-4",
+      "query": "How is distributed tracing propagated across services and queues?",
+      "relevant_chunk_ids": ["00000000-0000-0000-0000-000000000007"],
+      "expected_answer": "OpenTelemetry uses gRPC port 4317 and propagates the X-Correlation-ID header across HTTP and RabbitMQ headers."
+    },
+    {
+      "query_id": "q-5",
+      "query": "What similarity threshold is used for semantic question caching in Redis?",
+      "relevant_chunk_ids": ["00000000-0000-0000-0000-000000000008"],
+      "expected_answer": "Tier 2 semantic caching in Redis uses a cosine similarity threshold of 0.92."
+    }
+  ]
+}

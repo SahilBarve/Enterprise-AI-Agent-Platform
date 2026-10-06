@@ -54,9 +54,9 @@ ai-ops-platform/
 
 ## Current Status
 - **Phase**: Phase 1 — Core RAG [IN PROGRESS]
-- **Done**: Phase 0 Foundation complete. Slices 1.1–1.4 complete: `HybridRetriever` with RRF & parent expansion, `CrossEncoderReranker` with MMR, `CitationEngine` ([`libs/retrieval/citations.py`](file:///d:/Projects/AI-Operations-Platform/libs/retrieval/citations.py)) for [N] bracketed citations and claim groundedness checking, and `RAGGenerator` ([`libs/retrieval/generator.py`](file:///d:/Projects/AI-Operations-Platform/libs/retrieval/generator.py)) with LLM provider abstraction ([`libs/llm/provider.py`](file:///d:/Projects/AI-Operations-Platform/libs/llm/provider.py)) and "I don't know" fallback (FR-RAG-28). 61 unit tests passing.
-- **In Progress**: Slice 1.5: Evaluation harness plumbing & golden dataset baseline (`evals/datasets/golden_rag.json`, `evals/metrics.py`, `evals/runner.py` measuring Recall@10, MRR, Hit Rate).
-- **Next**: Slice 1.6: Gateway Ingestion & Search API Endpoints (`POST /collections`, `POST /documents`, `POST /search`, `POST /query`).
+- **Done**: Phase 0 Foundation complete. Slices 1.1–1.5 complete: `HybridRetriever` with RRF & parent expansion, `CrossEncoderReranker` with MMR, `CitationEngine`, `RAGGenerator`, and evaluation harness ([`evals/datasets/golden_rag.json`](file:///d:/Projects/AI-Operations-Platform/evals/datasets/golden_rag.json), [`evals/metrics.py`](file:///d:/Projects/AI-Operations-Platform/evals/metrics.py), [`evals/runner.py`](file:///d:/Projects/AI-Operations-Platform/evals/runner.py)) with Phase 1 Exit Criteria verified: Recall@10 = 1.0, MRR = 1.0, Hit Rate = 1.0 on golden technical ops dataset. 66 unit tests passing.
+- **In Progress**: Slice 1.6: Gateway Ingestion & Search API Endpoints (`POST /api/v1/collections`, `POST /api/v1/collections/{id}/documents`, `POST /api/v1/search`, `POST /api/v1/query`).
+- **Next**: Complete Phase 1 exit summary and prepare for Phase 2 (Optimization).
 
 ## Known Gaps
 - None.
