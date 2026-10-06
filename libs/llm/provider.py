@@ -66,9 +66,17 @@ class MockLLMProvider:
         last_message = messages[-1].content if messages else ""
 
         if "[Source 1]" in last_message:
-            # Generate a grounded mock answer citing source [1]
+            # Extract content line from [Source 1] block to guarantee true grounding
+            after_s1 = last_message.split("[Source 1]", 1)[1]
+            first_line = ""
+            for line in after_s1.splitlines():
+                sline = line.strip()
+                if sline and not sline.startswith("(") and not sline.startswith("Question:"):
+                    first_line = sline
+                    break
+            grounded_text = first_line if first_line else "the service requires health probes and OpenTelemetry"
             return LLMResponse(
-                content="Based on the architecture specifications, the service requires health probes and OpenTelemetry [1].",
+                content=f"According to documentation, {grounded_text.rstrip('.')} [1].",
                 prompt_tokens=120,
                 completion_tokens=30,
                 model="mock-grounded",

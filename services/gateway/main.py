@@ -13,6 +13,7 @@ from libs.common.errors import AppError
 from libs.common.health import HealthCheckRegistry
 from libs.common.logging import configure_logging, get_logger
 from libs.common.telemetry import CorrelationIdMiddleware, setup_telemetry
+from services.gateway.rag_router import router as rag_router
 
 logger = get_logger("gateway")
 
@@ -124,6 +125,9 @@ def create_gateway_app(settings: PlatformSettings | None = None) -> FastAPI:
             "version": "0.1.0",
             "environment": active_settings.ENVIRONMENT,
         }
+
+    # Register domain routers
+    app.include_router(rag_router)
 
     return app
 

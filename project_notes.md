@@ -726,6 +726,82 @@ NDCG normalizes this against the ideal ordering (IDCG), producing a score betwee
    ```
    *Expected output*: 66 passed, 89% total coverage.
 
+---
+
+## [2026-10-06] Phase 1 (Slice 1.6) — Gateway Ingestion & Search API Endpoints (Phase 1 Complete)
+
+### (a) What was done
+1. **Dependency Injection Providers ([`services/gateway/dependencies.py`](file:///d:/Projects/AI-Operations-Platform/services/gateway/dependencies.py))**:
+   - Built lazy dependency providers: `get_qdrant_client`, `get_dense_model`, `get_sparse_encoder`, `get_indexer`, `get_retriever`, `get_reranker`, `get_citation_engine`, `get_llm_provider`, and `get_rag_generator`.
+   - In testing mode (`ENVIRONMENT="testing"`), cleanly serves in-memory Qdrant with zero port conflicts.
+2. **Gateway RAG API Router ([`services/gateway/rag_router.py`](file:///d:/Projects/AI-Operations-Platform/services/gateway/rag_router.py))**:
+   - `POST /api/v1/collections`: Initializes tenant-isolated Qdrant collection with dual named vectors and payload indices.
+   - `POST /api/v1/collections/{id}/documents`: Ingests document text/markdown -> layout-aware parsing -> chunking -> batch embedding -> Qdrant upsert; returns document UUID, chunk count, and SHA-256 hash.
+   - `DELETE /api/v1/collections/{id}/documents/{doc_id}?tenant_id={tid}`: Cascading deletion of document points under mandatory tenant isolation (FR-RAG-10).
+   - `POST /api/v1/search`: Hybrid retrieval with Reciprocal Rank Fusion, parent expansion, and cross-encoder reranking; returns ranked `SearchResult` items.
+   - `POST /api/v1/query`: Full RAG pipeline returning cited, grounded answers with confidence scores and refusal fallback.
+3. **Mounted Router in Gateway ([`services/gateway/main.py`](file:///d:/Projects/AI-Operations-Platform/services/gateway/main.py))**:
+   - Registered `rag_router` into the primary FastAPI application.
+4. **Integration Tests ([`tests/unit/test_gateway_rag.py`](file:///d:/Projects/AI-Operations-Platform/tests/unit/test_gateway_rag.py))**:
+   - Implemented 5 integration tests covering collection creation, document ingestion, hybrid search, question answering with citations, cascading deletion, and cross-tenant isolation.
+   - Test suite now stands at **71 passing tests** with **90% total test coverage**.
+   - Mypy passes strictly with 0 errors across 46 source files; Ruff checks 100% clean.
+
+---
+
+### (b) Why we chose this approach
+- **Decoupled Gateway Layer via FastAPI Dependencies**: The API Gateway endpoints do not instantiate database connections or vector models directly; they receive them through FastAPI's `Depends` system. This makes unit and integration testing blazingly fast by swapping Qdrant for an in-memory client while keeping production code completely production-ready.
+- **Tenant Scope Enforced at Route Boundary**: Every collection name and delete selector derives the Qdrant namespace from `tenant_id` (`col_{tenant_id}_{collection_id}`), preventing accidental cross-tenant data leakage even before queries reach the vector engine.
+
+---
+
+### (c) Alternatives considered and why rejected
+- **Direct S3 upload before vectorization for MVP**:
+  - *Why rejected*: Storing raw document bytes in S3 will be wired into worker queues in Phase 5. For Phase 1, exposing immediate synchronous ingestion via the Gateway API allows testing the end-to-end RAG pipeline from HTTP request to vector storage immediately.
+
+---
+
+### (d) Trade-offs and risks
+- **Synchronous Ingestion on Large Files**: Ingesting 500-page PDFs synchronously over HTTP would cause gateway request timeouts. *Mitigation*: In Phase 5, large document uploads will be queued to RabbitMQ workers with async status polling, while the synchronous endpoint remains for small operational docs and real-time updates.
+
+---
+
+### (e) Non-trivial concepts explained simply
+
+#### 1. FastAPI Dependency Injection (`Depends`)
+Instead of global singletons:
+```python
+# Bad: Hardcoded global client
+client = QdrantClient(url="http://localhost:6333")
+```
+We define dependency functions:
+```python
+def get_indexer(client: Annotated[QdrantClient, Depends(get_qdrant_client)]) -> QdrantHybridIndexer:
+    return QdrantHybridIndexer(client=client)
+```
+In tests, `app.dependency_overrides[get_qdrant_client] = lambda: QdrantClient(location=":memory:")` instantly swaps the database without changing a single line of production code.
+
+---
+
+### (f) How to verify it works
+1. Run gateway RAG integration tests:
+   ```bash
+   .\.venv\Scripts\pytest.exe tests/unit/test_gateway_rag.py -v
+   ```
+   *Expected output*: 5 passed in <1.8s.
+2. Run full test suite with coverage:
+   ```bash
+   .\.venv\Scripts\pytest.exe --cov=libs --cov=evals --cov=services -v
+   ```
+   *Expected output*: 71 passed, 90% total coverage.
+3. Run strict linters and type checkers:
+   ```bash
+   .\.venv\Scripts\ruff.exe check .
+   .\.venv\Scripts\mypy.exe libs services evals tests
+   ```
+   *Expected output*: All checks passed in 46 source files.
+
+
 
 
 

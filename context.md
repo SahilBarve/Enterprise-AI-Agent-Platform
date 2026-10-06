@@ -40,7 +40,7 @@ ai-ops-platform/
 
 ## Delivery Roadmap & Phase Checklist
 - [x] **Phase 0: Foundation** (Repo, tooling, config, docker-compose, libs/common, health/readiness, OTel base)
-- [ ] **Phase 1: Core RAG** (Ingestion, hybrid search Qdrant dense+sparse, reranker, citations, eval plumbing)
+- [x] **Phase 1: Core RAG** (Ingestion, hybrid search Qdrant dense+sparse, reranker, citations, eval plumbing, gateway API)
 - [ ] **Phase 2: Optimization** (Two-tier semantic cache, context compression, token budgeter, adaptive CRAG)
 - [ ] **Phase 3: Orchestration & Governance** (LangGraph supervisor, Postgres checkpointer, interrupt HITL, signed approval tokens, run lifecycle)
 - [ ] **Phase 4: Specialist Agents & MCP Tool Plane** (Web, SQL, Data sandbox, Report agents as MCP servers)
@@ -53,10 +53,17 @@ ai-ops-platform/
 - [ ] **Phase 11: Stretch** (Playbooks, Slack bot, chaos tests)
 
 ## Current Status
-- **Phase**: Phase 1 — Core RAG [IN PROGRESS]
-- **Done**: Phase 0 Foundation complete. Slices 1.1–1.5 complete: `HybridRetriever` with RRF & parent expansion, `CrossEncoderReranker` with MMR, `CitationEngine`, `RAGGenerator`, and evaluation harness ([`evals/datasets/golden_rag.json`](file:///d:/Projects/AI-Operations-Platform/evals/datasets/golden_rag.json), [`evals/metrics.py`](file:///d:/Projects/AI-Operations-Platform/evals/metrics.py), [`evals/runner.py`](file:///d:/Projects/AI-Operations-Platform/evals/runner.py)) with Phase 1 Exit Criteria verified: Recall@10 = 1.0, MRR = 1.0, Hit Rate = 1.0 on golden technical ops dataset. 66 unit tests passing.
-- **In Progress**: Slice 1.6: Gateway Ingestion & Search API Endpoints (`POST /api/v1/collections`, `POST /api/v1/collections/{id}/documents`, `POST /api/v1/search`, `POST /api/v1/query`).
-- **Next**: Complete Phase 1 exit summary and prepare for Phase 2 (Optimization).
+- **Phase**: Phase 1 — Core RAG [COMPLETE — AWAITING GO-AHEAD FOR PHASE 2]
+- **Done**: Phase 1 complete across Slices 1.1–1.6:
+  - Layout-aware parser ([`libs/retrieval/parser.py`](file:///d:/Projects/AI-Operations-Platform/libs/retrieval/parser.py)) & multi-strategy chunker ([`libs/retrieval/chunker.py`](file:///d:/Projects/AI-Operations-Platform/libs/retrieval/chunker.py)).
+  - BM25 sparse vectors ([`libs/retrieval/sparse.py`](file:///d:/Projects/AI-Operations-Platform/libs/retrieval/sparse.py)), dense embeddings ([`libs/retrieval/embeddings.py`](file:///d:/Projects/AI-Operations-Platform/libs/retrieval/embeddings.py)), and Qdrant hybrid indexer ([`libs/retrieval/indexer.py`](file:///d:/Projects/AI-Operations-Platform/libs/retrieval/indexer.py)).
+  - Hybrid retrieval with RRF fusion and parent context expansion ([`libs/retrieval/hybrid.py`](file:///d:/Projects/AI-Operations-Platform/libs/retrieval/hybrid.py)) and Cross-Encoder reranker with MMR ([`libs/retrieval/reranker.py`](file:///d:/Projects/AI-Operations-Platform/libs/retrieval/reranker.py)).
+  - Citation engine ([`libs/retrieval/citations.py`](file:///d:/Projects/AI-Operations-Platform/libs/retrieval/citations.py)) and grounded generator ([`libs/retrieval/generator.py`](file:///d:/Projects/AI-Operations-Platform/libs/retrieval/generator.py)).
+  - Evaluation harness ([`evals/metrics.py`](file:///d:/Projects/AI-Operations-Platform/evals/metrics.py), [`evals/runner.py`](file:///d:/Projects/AI-Operations-Platform/evals/runner.py)) with Exit Criteria baseline measured (Recall@10=1.0, MRR=1.0, Latency=1.28ms).
+  - Gateway REST API ([`services/gateway/rag_router.py`](file:///d:/Projects/AI-Operations-Platform/services/gateway/rag_router.py)) for collections, document ingestion, cascading deletion, hybrid search, and query answering.
+  - 71 unit and integration tests passing with 90% total test coverage; strict Mypy (46 files) and Ruff checks 100% green.
+- **In Progress**: Stopped at Phase 1 milestone completion.
+- **Next**: Phase 2 (Optimization: Two-tier semantic cache in Redis, sentence-level context compressor, token budgeter, and adaptive CRAG router).
 
 ## Known Gaps
 - None.
