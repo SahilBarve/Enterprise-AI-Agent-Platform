@@ -1,5 +1,7 @@
 """Unit tests for structured logging and context variable injection."""
 
+from typing import Any
+
 import pytest
 
 from libs.common.logging import (
@@ -20,7 +22,7 @@ def test_add_contextvars_injects_metadata() -> None:
     run_token = run_id_ctx.set("run-456")
 
     try:
-        event_dict: dict = {"event": "user_action", "status": "ok"}
+        event_dict: dict[str, Any] = {"event": "user_action", "status": "ok"}
         processed = add_contextvars(None, "info", event_dict)
 
         assert processed["correlation_id"] == "corr-test-123"
@@ -36,7 +38,7 @@ def test_add_contextvars_injects_metadata() -> None:
 @pytest.mark.unit
 def test_add_contextvars_when_empty() -> None:
     """Validate processor leaves dictionary unmodified when contextvars are unset."""
-    event_dict: dict = {"event": "system_boot"}
+    event_dict: dict[str, Any] = {"event": "system_boot"}
     processed = add_contextvars(None, "info", event_dict)
     assert "correlation_id" not in processed
     assert "tenant_id" not in processed

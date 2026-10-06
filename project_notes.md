@@ -388,4 +388,82 @@ This guarantees that tabular chunks remain fully interpretable to embedding mode
    ```
    *Expected output*: 37 passed.
 
+---
+
+## [2026-10-06] Phase 1 (Slice 1.2) — Dense & Sparse BM25 Embeddings and Qdrant Hybrid Indexing
+
+### (a) What was done
+1. **BM25 Sparse Vector Encoder ([`libs/retrieval/sparse.py`](file:///d:/Projects/AI-Operations-Platform/libs/retrieval/sparse.py))**:
+   - Implemented `BM25SparseEncoder` implementing BM25 term weighting:
+     $$w_t = \frac{\text{tf} \cdot (k_1 + 1)}{\text{tf} + k_1 \cdot \left(1 - b + b \cdot \frac{\text{doc\_len}}{\text{avg\_len}}\right)}$$
+   - Applied positive 31-bit token hashing trick (`hashlib.md5(token)[:8] % 1_000_000`) and logarithmic weight compression.
+   - Outputs sorted `rest.SparseVector(indices=..., values=...)` strictly matching Qdrant's sparse vector index specification.
+2. **Dense Vector Embedding Generator ([`libs/retrieval/embeddings.py`](file:///d:/Projects/AI-Operations-Platform/libs/retrieval/embeddings.py))**:
+   - Implemented `DenseEmbeddingModel` with batching, L2 vector normalization (unit length for cosine distance), and lazy model loading.
+   - Built a deterministic mock embedding mode enabling fast unit test execution (<0.01s per test) with zero external network downloads.
+3. **Qdrant Hybrid Indexer & Collection Manager ([`libs/retrieval/indexer.py`](file:///d:/Projects/AI-Operations-Platform/libs/retrieval/indexer.py))**:
+   - Configured dual named vector collections: `"dense"` (size 384, cosine distance) and `"sparse"` (sparse vector index).
+   - Created keyword payload indices on `tenant_id`, `collection_id`, `document_id`, `is_parent` for pre-retrieval filtering (FR-RAG-13).
+   - Implemented batch point upsert with complete provenance metadata (chunk ID, document ID, page number, section breadcrumbs, parent ID, token count, content hash).
+   - Implemented cascading document deletion (`delete_document`) scoped by tenant ID (FR-RAG-10).
+4. **Unit Tests & Verification**:
+   - Created [`tests/unit/test_sparse.py`](file:///d:/Projects/AI-Operations-Platform/tests/unit/test_sparse.py), [`tests/unit/test_embeddings.py`](file:///d:/Projects/AI-Operations-Platform/tests/unit/test_embeddings.py), and [`tests/unit/test_indexer.py`](file:///d:/Projects/AI-Operations-Platform/tests/unit/test_indexer.py). Total unit tests increased from 37 to 46 (100% passing).
+   - Strict `mypy` and `ruff` checks passing with 0 errors.
+
+---
+
+### (b) Why we chose this approach
+- **Unified Hybrid Storage in Qdrant**: Traditional architectures run an Elasticsearch/OpenSearch cluster for BM25 and a separate vector database for dense embeddings. This doubles operational cost, cloud footprint, and data synchronization headaches. Qdrant natively supports both named dense vectors and sparse inverted vectors in the same collection, allowing atomic upserts and unified queries.
+- **Pre-Retrieval Tenant Filtering**: Multi-tenancy must never be an afterthought. By indexing `tenant_id` as a keyword payload field and configuring payload indexes, queries will apply tenant filters at the vector index level, ensuring zero data leakage between organizations.
+
+---
+
+### (c) Alternatives considered and why rejected
+- **Dense-only vector search**:
+  - *Why rejected*: Pure dense embeddings are semantic; they struggle with exact keyword matches like part numbers ("SKU-4912"), error codes ("ERR-10061"), and proper nouns. Sparse BM25 indexing guarantees that exact keyword queries receive top ranking.
+- **Separate BM25 search engine (Elasticsearch)**:
+  - *Why rejected*: Significant operational overhead, memory consumption (JVM heap), and dual-write consistency issues. Qdrant provides both dense and sparse retrieval in a single lightweight Rust binary.
+
+---
+
+### (d) Trade-offs and risks
+- **Index memory in Qdrant**: Storing two vectors per chunk increases memory usage. *Mitigation*: Sparse vectors only store non-zero term indices and weights (typically 20–50 non-zero elements per chunk), making sparse index overhead a fraction of dense vector memory.
+
+---
+
+### (e) Non-trivial concepts explained simply
+
+#### 1. Dense vs. Sparse Vectors in Hybrid Retrieval
+Imagine a user searching for:
+$$\text{Query: "Fix for error ERR-404-AUTH in gateway"}$$
+- **Dense Vector (Bi-encoder)**:
+  Compresses the sentence into 384 floating-point numbers based on general semantic meaning. The dense model knows "Fix" is similar to "Resolve", and "error" is similar to "exception". But it may blur "ERR-404-AUTH" into a generic "error code" embedding, matching unrelated errors like "ERR-500-INTERNAL".
+- **Sparse Vector (BM25)**:
+  Represents exact keyword tokens as high-dimensional coordinates:
+  $$\text{Vector: } \{\text{index}(ERR\text{-}404\text{-}AUTH): 3.25, \; \text{index}(gateway): 1.12\}$$
+  Any document mentioning the exact token "ERR-404-AUTH" receives an enormous score boost.
+
+By indexing **both** in Qdrant, our upcoming hybrid retriever merges semantic understanding with exact token precision.
+
+#### 2. Deterministic Hash Trick for Sparse Vocabulary
+Traditional BM25 requires maintaining a global dictionary mapping every unique word to an ID (`{"the": 0, "platform": 1, ...}`). In distributed systems, keeping a synchronized global vocabulary across multiple worker processes requires shared state or database locks.
+Instead, we use the **Hashing Trick**:
+$$\text{Token Index} = \text{MD5}(\text{token}) \pmod{1{,}000{,}000}$$
+Every worker or server calculates the identical index for any word instantly, with zero network communication or dictionary synchronization.
+
+---
+
+### (f) How to verify it works
+1. Run sparse, embeddings, and indexer unit tests:
+   ```bash
+   .\.venv\Scripts\pytest.exe tests/unit/test_sparse.py tests/unit/test_embeddings.py tests/unit/test_indexer.py -v
+   ```
+   *Expected output*: 9 passed in <0.3s.
+2. Run full test suite with coverage:
+   ```bash
+   .\.venv\Scripts\pytest.exe tests/unit -v --cov=libs --cov=services
+   ```
+   *Expected output*: 46 passed, 90% coverage.
+
+
 

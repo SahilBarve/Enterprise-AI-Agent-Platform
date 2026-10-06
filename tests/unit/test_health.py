@@ -15,7 +15,7 @@ async def test_health_registry_liveness() -> None:
     response = await registry.liveness()
 
     assert response.status_code == 200
-    data = json.loads(response.body.decode())
+    data = json.loads(bytes(response.body).decode())
     assert data["status"] == "ok"
     assert data["service"] == "test-service"
     assert data["version"] == "1.0.0"
@@ -39,7 +39,7 @@ async def test_health_registry_readiness_all_healthy() -> None:
 
     response = await registry.readiness()
     assert response.status_code == 200
-    data = json.loads(response.body.decode())
+    data = json.loads(bytes(response.body).decode())
     assert data["status"] == HealthStatus.HEALTHY
     assert data["dependencies"]["postgres"]["status"] == HealthStatus.HEALTHY
     assert data["dependencies"]["redis"]["status"] == HealthStatus.HEALTHY
@@ -62,7 +62,7 @@ async def test_health_registry_readiness_with_failure() -> None:
 
     response = await registry.readiness()
     assert response.status_code == 503
-    data = json.loads(response.body.decode())
+    data = json.loads(bytes(response.body).decode())
     assert data["status"] == HealthStatus.UNHEALTHY
     assert data["dependencies"]["postgres"]["status"] == HealthStatus.HEALTHY
     assert data["dependencies"]["qdrant"]["status"] == HealthStatus.UNHEALTHY
@@ -75,5 +75,5 @@ def test_health_registry_metrics_export() -> None:
     registry = HealthCheckRegistry(service_name="test-service")
     response = registry.metrics()
     assert response.status_code == 200
-    assert response.media_type.startswith("text/plain")
+    assert response.media_type is not None and response.media_type.startswith("text/plain")
     assert b"http_requests_total" in response.body or b"#" in response.body

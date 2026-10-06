@@ -28,7 +28,7 @@ def test_trace_context_injection_and_extraction() -> None:
     """Validate W3C TraceContext injection and extraction across boundaries."""
     tracer = trace.get_tracer("test-tracer")
     with tracer.start_as_current_span("parent-operation"):
-        carrier: dict = {}
+        carrier: dict[str, str] = {}
         inject_trace_context(carrier)
 
         assert "traceparent" in carrier

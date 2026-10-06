@@ -54,9 +54,9 @@ ai-ops-platform/
 
 ## Current Status
 - **Phase**: Phase 1 — Core RAG [IN PROGRESS]
-- **Done**: Phase 0 Foundation complete. Slice 1.1 complete: DocumentParser ([`libs/retrieval/parser.py`](file:///d:/Projects/AI-Operations-Platform/libs/retrieval/parser.py)) supporting TXT, MD, HTML, CSV, PDF with layout preservation; DocumentChunker ([`libs/retrieval/chunker.py`](file:///d:/Projects/AI-Operations-Platform/libs/retrieval/chunker.py)) supporting Recursive, Heading-aware, Table-aware, and Parent-Child small-to-big chunking with SHA-256 dedup. 37 unit tests passing with 91% test coverage.
-- **In Progress**: Slice 1.2: Dense & sparse BM25 embeddings and Qdrant hybrid collection indexing ([`libs/retrieval/embeddings.py`](file:///d:/Projects/AI-Operations-Platform/libs/retrieval/embeddings.py), [`libs/retrieval/sparse.py`](file:///d:/Projects/AI-Operations-Platform/libs/retrieval/sparse.py), [`libs/retrieval/indexer.py`](file:///d:/Projects/AI-Operations-Platform/libs/retrieval/indexer.py)).
-- **Next**: Slice 1.3: Hybrid retrieval, Reciprocal Rank Fusion (RRF), cross-encoder reranking, and parent context expansion.
+- **Done**: Phase 0 Foundation complete. Slice 1.1 (Parser & Chunker) and Slice 1.2 (Embeddings & Qdrant Hybrid Indexing) complete: `BM25SparseEncoder` ([`libs/retrieval/sparse.py`](file:///d:/Projects/AI-Operations-Platform/libs/retrieval/sparse.py)), `DenseEmbeddingModel` ([`libs/retrieval/embeddings.py`](file:///d:/Projects/AI-Operations-Platform/libs/retrieval/embeddings.py)), and `QdrantHybridIndexer` ([`libs/retrieval/indexer.py`](file:///d:/Projects/AI-Operations-Platform/libs/retrieval/indexer.py)) with dual named vectors (`dense` + `sparse`), payload indexes, and cascading deletion. 46 unit tests passing with 90% test coverage.
+- **In Progress**: Slice 1.3: Hybrid retrieval, Reciprocal Rank Fusion (RRF), cross-encoder reranking, and parent context expansion ([`libs/retrieval/hybrid.py`](file:///d:/Projects/AI-Operations-Platform/libs/retrieval/hybrid.py), [`libs/retrieval/reranker.py`](file:///d:/Projects/AI-Operations-Platform/libs/retrieval/reranker.py)).
+- **Next**: Slice 1.4: Inline citation engine & answer generation; Slice 1.5: Evaluation harness golden dataset baseline; Slice 1.6: Ingestion & search API endpoints.
 
 ## Known Gaps
 - None.

@@ -27,6 +27,8 @@ dependencies = [
     "prometheus-client>=0.21.0",
     "pypdf>=4.3.0",
     "beautifulsoup4>=4.12.0",
+    "qdrant-client>=1.11.0",
+    "fastembed>=0.3.0",
 ]
 
 [project.optional-dependencies]
@@ -95,6 +97,7 @@ module = [
     "opentelemetry.*",
     "prometheus_client.*",
     "structlog.*",
+    "fastembed.*",
 ]
 ignore_missing_imports = true
 
