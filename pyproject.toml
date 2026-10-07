@@ -29,6 +29,9 @@ dependencies = [
     "beautifulsoup4>=4.12.0",
     "qdrant-client>=1.11.0",
     "fastembed>=0.3.0",
+    "langgraph>=0.2.20",
+    "langchain-core>=0.3.0",
+    "sqlalchemy>=2.0.35",
 ]
 
 [project.optional-dependencies]

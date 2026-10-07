@@ -1352,3 +1352,102 @@ Chunk B and Chunk C are pushed out! The LLM prompt now contains only Chunk A twi
   - Off-topic or ambiguous queries are dynamically corrected or refused without hallucination.
   - Large prompt context windows are compressed by ~30–60% with zero loss of critical factual sentences.
   - Phase 2 exit criteria are fully satisfied and verified.
+
+---
+
+## [2026-10-07] Phase 3: Slice 3.1 — Orchestration State Schema, LangGraph Reducers, and Persistent Checkpointing
+
+### (a) What was done
+1. **LangGraph State Schema & Lifecycle Modeling** (`libs/agents/state.py`):
+   - Defined `RunStatus` with the 7 canonical lifecycle states: `queued`, `planning`, `running`, `awaiting_approval`, `completed`, `failed`, `cancelled` (FR-OR-9).
+   - Modeled `AgentType` for the 5 specialized platform agents + supervisor (`supervisor`, `document_rag`, `web_research`, `sql_analytics`, `data_processing`, `report_generation`).
+   - Modeled `PlanStep` and `Plan` tracking step IDs, target agents, action types, prerequisite dependencies, arguments, execution status, and results.
+   - Modeled `BudgetLimits` and `BudgetUsage` enforcing hard ceilings on steps taken, tokens consumed, monetary spend (USD), and wall-clock execution time (FR-OR-7).
+   - Defined `ApprovalRequest` capturing action, exact arguments, risk tier, and single-use HMAC approval tokens.
+   - Defined `StepEvent` streaming timeline items for real-time frontend visibility over SSE (FR-GW-6).
+2. **LangGraph State Reducers** (`libs/agents/state.py`):
+   - Implemented `append_events`: Prevents overwriting streaming event logs during node state updates.
+   - Implemented `append_artifacts`: Appends newly generated reports, plots, and files to the run's artifact collection.
+   - Implemented `merge_step_results`: Incrementally joins completed step results into the global state dictionary.
+3. **Persistent Checkpointer Engine** (`libs/agents/checkpointer.py`):
+   - Created `PlatformCheckpointer` abstraction supporting `save_checkpoint()`, `get_latest_checkpoint()`, `list_checkpoints()`, and `fork_checkpoint()`.
+   - Built `MemoryPlatformCheckpointer` for instant unit tests with full history tracking.
+   - Built `SQLPlatformCheckpointer` using SQLAlchemy (supporting SQLite locally and PostgreSQL in production) with schema initialization, indexed query lookups, and JSON serialization.
+   - Implemented time-travel debugging & forking (FR-OR-10): Allows branching a historical checkpoint into a new run with state overrides.
+   - Implemented crash recovery simulation: Verified that a simulated process crash mid-run is fully recovered by a replacement worker resuming from the database checkpoint.
+4. **Verification**:
+   - 8 unit tests in `tests/unit/test_state.py` and `tests/unit/test_checkpointer.py` passing 100% green.
+   - Strict `mypy` across 54 source files and `ruff` linting passing cleanly.
+
+---
+
+### (b) Why we chose this approach
+1. **Strong Typing Over Untyped Dicts**:
+   - In distributed multi-agent systems, passing untyped dictionaries between nodes leads to typos (`status` vs `state`), missing keys, and fragile orchestration. Using Pydantic models nested inside LangGraph's `TypedDict` provides IDE autocompletion, compile-time type verification, and runtime validation.
+2. **Append-Only Reducer Semantics**:
+   - By default, LangGraph graph transitions overwrite existing dictionary keys. Reducer annotations (`Annotated[list[T], reducer]`) guarantee that audit logs, events, and artifacts accumulate monotonically throughout the run lifecycle.
+3. **Durable ACID Checkpointing**:
+   - Relational checkpointing ensures runs survive container crashes, out-of-memory errors, and days of human approval latency without state loss.
+
+---
+
+### (c) Alternatives considered and why rejected
+- **Storing Checkpoints Exclusively in Redis**:
+  - *Why rejected*: Redis is an in-memory store configured with eviction policies (e.g. `allkeys-lru`). Under high memory pressure, active or paused checkpoints could be evicted, causing unrecoverable run loss. Relational databases guarantee ACID persistence.
+- **Relying on LangGraph's default ephemeral memory**:
+  - *Why rejected*: Ephemeral in-memory state is lost the moment a process restarts or an AWS pod is rescheduled.
+
+---
+
+### (d) Trade-offs and risks
+- **State serialization latency**:
+  - Writing JSON state snapshots at every step adds ~2–5ms per node transition.
+  - *Mitigation*: Serialized state only includes references and summaries; large binary artifacts (e.g. PDFs, images) are stored in S3/MinIO and referenced by URL.
+
+---
+
+### (e) Non-trivial concepts explained simply
+
+#### 1. LangGraph State Reducers
+In LangGraph, state flows from node to node:
+```python
+# Without a reducer: Node B overwrites Node A's events!
+def node_a(state): return {"events": [Event("step_a")]}
+def node_b(state): return {"events": [Event("step_b")]} # Events is now ONLY [Event("step_b")]!
+```
+With a reducer function:
+```python
+def append_events(left: list[Event], right: list[Event]) -> list[Event]:
+    return left + right
+
+class AgentState(TypedDict):
+    events: Annotated[list[Event], append_events] # Tells LangGraph to use append_events
+```
+When Node B returns `{"events": [Event("step_b")]}`, LangGraph invokes `append_events([Event("step_a")], [Event("step_b")])`, preserving the complete audit history!
+
+#### 2. Time-Travel Debugging (Checkpoint Forking)
+Suppose an agent run failed at Step 4 because the prompt was too ambiguous:
+```
+Checkpoint 1 (Planner) ──> Checkpoint 2 (Web Research) ──> Checkpoint 3 (SQL) ──> Checkpoint 4 (FAILED)
+                                                                │
+                                            fork_checkpoint(chk_3, new_run_id="run-debug")
+                                                                │
+                                                                ▼
+                                                   Checkpoint 4b (Fixed Prompt) ──> SUCCESS!
+```
+Rather than re-running the expensive Web Research and SQL queries, `fork_checkpoint()` clones the exact state at Checkpoint 3, assigns a new run ID, and resumes execution from that point.
+
+---
+
+### (f) How to verify it works
+1. Run state and checkpointer unit tests:
+   ```bash
+   .\.venv\Scripts\pytest.exe tests/unit/test_state.py tests/unit/test_checkpointer.py -v
+   ```
+   *Expected output*: 8 passed in <2s.
+2. Run strict linting and type checking:
+   ```bash
+   .\.venv\Scripts\ruff.exe check libs/agents tests/unit/test_state.py tests/unit/test_checkpointer.py
+   .\.venv\Scripts\mypy.exe libs/agents tests/unit/test_state.py tests/unit/test_checkpointer.py
+   ```
+   *Expected output*: All checks passed.
