@@ -1572,3 +1572,117 @@ Even if an attacker intercepts an approval token for `send_webhook {"amount": 50
   - Argument tampering and prompt-injection mutation attacks against pending approvals are mathematically prevented.
   - Replay attacks against destructive or financial actions are eliminated.
   - Satisfies the P0 HITL Governance mandate prior to building specialist agents in Phase 4.
+
+---
+
+## [2026-10-07] Phase 3: Slice 3.3 — Planner, Critic & Multi-Agent LangGraph Supervisor with Persisted Interrupts
+
+### (a) What was done
+1. **Multi-Agent Supervisor Graph Construction** (`libs/agents/supervisor.py`):
+   - Built `MultiAgentSupervisor` compiling a LangGraph `StateGraph(AgentState)` backed by a persistent checkpointer.
+   - **Planner Node** (FR-OR-1): Decomposes natural language user goals into structured plans (`Plan`) composed of dependency-aware `PlanStep`s assigned to specialized agents (`document_rag`, `sql_analytics`, `report_generation`, etc.).
+   - **Supervisor Router Node** (FR-OR-3, FR-OR-7):
+     - Enforces resource limits (`BudgetLimits`: max steps, max tokens, max cost, max time) using `BudgetUsage.is_exceeded()`.
+     - Evaluates proposed step actions against the `GovernanceGate`.
+     - Automatically halts execution and triggers a persisted `interrupt()` whenever a Tier 2 high-risk mutation (e.g. `run_sql_write`) is encountered without an approval token (FR-OR-6, P0 Pillar).
+   - **Worker Nodes**:
+     - `document_rag_worker`: Executes grounded document retrieval and answer generation using `RAGGenerator`.
+     - `generic_worker`: Executes simulated and specialist agent actions (SQL, Web, Report).
+     - Advances the plan step pointer and updates token usage.
+   - **Critic Node** (FR-OR-4): Validates that all planned steps finished successfully, synthesizes the final response, records terminal checkpoints, and marks `RunStatus.COMPLETED`.
+2. **Human-in-the-Loop Interrupt & Resume Lifecycle**:
+   - Integrated LangGraph's native `interrupt(approval_request.model_dump())` when a Tier 2 action is evaluated without a token.
+   - Saves a pre-interrupt checkpoint snapshot with `status = RunStatus.AWAITING_APPROVAL`.
+   - `resume_run(run_id, approval_token)`: Resumes execution from the paused checkpoint using `Command(resume=approval_token)`.
+   - Re-evaluates the approval token against the step arguments before allowing tool execution.
+3. **Verification**:
+   - 4 unit tests in `tests/unit/test_supervisor.py` passing 100% green covering autonomous read runs, HITL pauses and resumptions, tampered token rejections, and budget exhaustion.
+   - Strict `mypy` across 56 source files and `ruff` linting passing cleanly.
+
+---
+
+### (b) Why we chose this approach
+1. **Supervisor Pattern Over Unconstrained Peer-to-Peer**:
+   - In peer-to-peer multi-agent systems, agents pass messages directly to each other. Without centralized supervision, agents often enter cyclic loops, drift from the original user objective, and exhaust LLM token budgets.
+   - A Supervisor acts as an orchestrating conductor: it creates an explicit plan, assigns steps, tracks progress, and terminates when the goal is met.
+2. **Native LangGraph `interrupt()` for Zero-Idle HITL**:
+   - Older agent frameworks polled database tables in `while True: sleep(5)` loops to wait for human approvals, burning CPU and holding open database connections.
+   - LangGraph's `interrupt()` serializes graph state to PostgreSQL/memory and halts execution entirely. The process releases all resources until an HTTP approval triggers `resume_run()`.
+
+---
+
+### (c) Alternatives considered and why rejected
+- **Custom state machines instead of LangGraph**:
+  - *Why rejected*: LangGraph provides battle-tested checkpointing, step reducers, and time-travel debugging out of the box, fulfilling PRD requirements natively.
+- **Requiring manual approval for every single agent step**:
+  - *Why rejected*: Causes severe operator fatigue. Classifying actions into 4 risk tiers ensures safe queries (Tier 0 and Tier 1) execute autonomously, while dangerous mutations (Tier 2) are guaranteed human review.
+
+---
+
+### (d) Trade-offs and risks
+- **Reserved LangGraph Channel Names**:
+  - LangGraph reserves channel names like `__interrupt__` for its internal engine. Declaring `__interrupt__` in the `AgentState` TypedDict causes graph validation errors.
+  - *Mitigation*: `AgentState` defines user-facing domain state; internal interrupt payloads returned by `graph.invoke()` are accessed via dictionary casting.
+
+---
+
+### (e) Non-trivial concepts explained simply
+
+#### 1. The Planner -> Executor -> Critic Loop
+```
+                      ┌──────────────────────┐
+                      │      User Goal       │
+                      └──────────┬───────────┘
+                                 │
+                                 ▼
+                         [1] Planner Node
+                         (Decomposes goal into PlanSteps)
+                                 │
+                     ┌───────────┴───────────┐
+                     ▼                       │
+            [2] Supervisor Router            │
+            ├── Budget Exceeded? ──> Terminate (FAILED)
+            ├── Tier 2 Write?    ──> Persisted interrupt() (AWAITING_APPROVAL)
+            └── Route Step       ──┐
+                                   │
+                                   ▼
+                         [3] Worker Nodes
+                         (Document RAG / SQL / Web / Report)
+                                   │
+                                   ▼
+                         Update State & Step Results
+                                   │
+                                   ▼ (Loop back to Router)
+                                   │
+                     ┌─────────────┘
+                     │ (All Steps Completed)
+                     ▼
+                         [4] Critic Node
+                         (Synthesizes findings, checks completeness)
+                                 │
+                                 ▼
+                            [5] END (COMPLETED)
+```
+
+#### 2. How `interrupt()` and `Command(resume=...)` Work Under the Hood
+1. Execution arrives at a node: `interrupt({"action": "run_sql_write", ...})`
+2. LangGraph raises a internal GraphInterrupt, captures the argument dictionary, and commits current state to PostgreSQL.
+3. The graph function returns to the caller with `status = AWAITING_APPROVAL` and `__interrupt__` metadata.
+4. Hours later, the operator signs the token via UI/API.
+5. The API invokes `graph.invoke(Command(resume=token), config={"thread_id": run_id})`.
+6. LangGraph re-loads the checkpoint, replaces the `interrupt()` expression with `token`, and continues execution seamlessly.
+
+---
+
+### (f) How to verify it works
+1. Run supervisor unit tests:
+   ```bash
+   .\.venv\Scripts\pytest.exe tests/unit/test_supervisor.py -v
+   ```
+   *Expected output*: 4 passed in <2s.
+2. Run strict linting and type checking:
+   ```bash
+   .\.venv\Scripts\ruff.exe check libs/agents tests/unit/test_supervisor.py
+   .\.venv\Scripts\mypy.exe libs/agents tests/unit/test_supervisor.py
+   ```
+   *Expected output*: All checks passed across 5 source files.
