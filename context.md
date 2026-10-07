@@ -53,13 +53,14 @@ ai-ops-platform/
 - [ ] **Phase 11: Stretch** (Playbooks, Slack bot, chaos tests)
 
 ## Current Status
-- **Phase**: Phase 3 — Orchestration & Governance (Slice 3.1 Complete)
+- **Phase**: Phase 3 — Orchestration & Governance (Slice 3.2 Complete)
 - **Done**:
   - Phase 1 & Phase 2 complete, benchmarked, documented, and pushed to GitHub.
-  - Slice 3.1: Orchestration state schema & persistent checkpointers ([`libs/agents/state.py`](file:///d:/Projects/AI-Operations-Platform/libs/agents/state.py), [`libs/agents/checkpointer.py`](file:///d:/Projects/AI-Operations-Platform/libs/agents/checkpointer.py)) with typed lifecycle states, LangGraph reducers (`append_events`, `append_artifacts`, `merge_step_results`), budget limits (`BudgetLimits`, `BudgetUsage`), in-memory and SQL checkpointers, crash recovery resumption, and time-travel forking (FR-OR-2, FR-OR-5, FR-OR-7, FR-OR-9, FR-OR-10).
-  - 103 unit & integration tests passing with 91% coverage; strict Mypy (54 files) and Ruff 100% green.
-- **In Progress**: Slice 3.2: Risk-Tiered Policy Engine & Signed Approval Tokens (`libs/guardrails/tokens.py`, `libs/guardrails/governance.py`).
-- **Next**: Slice 3.3: Planner, Critic & Multi-Agent LangGraph Supervisor with Persisted Interrupts.
+  - Slice 3.1: Orchestration state schema & persistent checkpointers ([`libs/agents/state.py`](file:///d:/Projects/AI-Operations-Platform/libs/agents/state.py), [`libs/agents/checkpointer.py`](file:///d:/Projects/AI-Operations-Platform/libs/agents/checkpointer.py)) with typed lifecycle states, LangGraph reducers, budget guards, crash recovery, and time-travel forking (FR-OR-2, FR-OR-5, FR-OR-7, FR-OR-9, FR-OR-10).
+  - Slice 3.2: Risk-Tiered Policy Engine & Cryptographic Approval Tokens ([`libs/guardrails/tokens.py`](file:///d:/Projects/AI-Operations-Platform/libs/guardrails/tokens.py), [`libs/guardrails/governance.py`](file:///d:/Projects/AI-Operations-Platform/libs/guardrails/governance.py)) with HMAC-SHA256 argument binding ($\text{SHA256}(\text{canonical\_json}(\text{arguments}))$), anti-tampering verification, single-use replay prevention, and 4-tier risk policy gate (FR-OR-6, FR-SEC-3 to FR-SEC-6).
+  - 110 unit & integration tests passing with 91% coverage; strict Mypy (56 files) and Ruff 100% green.
+- **In Progress**: Slice 3.3: Planner, Critic & Multi-Agent LangGraph Supervisor with Persisted Interrupts (`libs/agents/supervisor.py`).
+- **Next**: Slice 3.4: Orchestrator Service, Approval API & Crash Recovery Exit Criteria.
 
 ## Known Gaps
 - None.

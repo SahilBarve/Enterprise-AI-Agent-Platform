@@ -1451,3 +1451,124 @@ Rather than re-running the expensive Web Research and SQL queries, `fork_checkpo
    .\.venv\Scripts\mypy.exe libs/agents tests/unit/test_state.py tests/unit/test_checkpointer.py
    ```
    *Expected output*: All checks passed.
+
+---
+
+## [2026-10-07] Phase 3: Slice 3.2 — Risk-Tiered Policy Engine & Cryptographic Approval Tokens (P0 Non-Negotiable Pillar)
+
+### (a) What was done
+1. **Cryptographic Approval Token Manager** (`libs/guardrails/tokens.py`):
+   - Implemented `canonical_json` and `hash_arguments`: Deterministically serializes argument dictionaries (sorted keys, compact separators) and calculates a SHA-256 digest:
+     $$\text{PayloadHash} = \text{SHA256}(\text{canonical\_json}(\text{arguments}))$$
+   - Modeled `ApprovalTokenPayload`: Encapsulates `token_id`, `run_id`, `tenant_id`, `action`, `payload_hash`, `expires_at`, and `created_at`.
+   - Built `ApprovalTokenManager`:
+     - Signs URL-safe base64 payloads using HMAC-SHA256 with the platform approval secret key (`APPROVAL_TOKEN_SECRET`).
+     - Emits signed opaque tokens formatted as `<payload_b64>.<signature>`.
+     - `verify_and_consume()`: Validates cryptographic signature, checks expiration, verifies run/tenant/action match, re-computes argument SHA-256 to ensure exact match (tamper detection), and checks single-use replay protection.
+     - Single-use replay prevention: Atomically records consumed token IDs; repeat submissions fail with `TOKEN_ALREADY_CONSUMED`.
+2. **Risk-Tiered Policy Engine & Governance Gate** (`libs/guardrails/governance.py`):
+   - Formalized 4-tier risk classification (`ActionRiskTier`):
+     - `Tier 0 (Read-Only)`: Document retrieval, web search, SQL `SELECT`, data profiling. Auto-approved.
+     - `Tier 1 (Low-Risk)`: Sandboxed code execution, data transformation, report drafting. Auto-approved with structured audit logging.
+     - `Tier 2 (High-Risk Write)`: SQL mutations (`INSERT`, `UPDATE`, `DELETE`, `DROP`), sending external webhooks, email delivery, publishing reports. **Mandatory HITL pause; requires signed approval token.**
+     - `Tier 3 (Prohibited)`: Shell execution, dropping system catalogs, credential exfiltration. Unconditionally blocked.
+   - Built `GovernancePolicy`: Enables per-tenant overrides (e.g. strict enterprise tenants disabling all SQL writes or requiring approval for all code).
+   - Built `GovernanceGate`: Centralized authorization gate evaluating proposed actions against policies and tokens before tool execution.
+3. **Verification**:
+   - 15 unit tests in `tests/unit/test_tokens.py` and `tests/unit/test_governance.py` passing 100% green.
+   - Strict `mypy` across 56 source files and `ruff` linting passing cleanly.
+
+---
+
+### (b) Why we chose this approach
+1. **Preventing Time-of-Check to Time-of-Use (TOCTOU) & Argument Tampering**:
+   - In naive multi-agent architectures, an approval record simply contains `is_approved = True`. If a prompt injection occurs between human review and tool execution, the agent could alter the pending query from `UPDATE users SET status='active'` to `DROP TABLE users;`.
+   - By embedding $\text{SHA256}(\text{arguments})$ directly inside an HMAC-signed token, the executing worker recomputes the hash from the *actual runtime arguments*. Any discrepancy immediately aborts execution.
+2. **Deterministic Canonical JSON**:
+   - Python dictionaries have undefined key order across platforms and serialization passes (`{"a": 1, "b": 2}` vs `{"b": 2, "a": 1}`). Without canonical serialization, identical arguments produce different hashes, causing false authorization rejections.
+3. **Defense-in-Depth Risk Tiering**:
+   - Classifying actions into 4 clear tiers ensures that harmless read actions are fast and autonomous, while irreversible mutations are strictly protected.
+
+---
+
+### (c) Alternatives considered and why rejected
+- **Database-Only Approval Flags (`run_approvals` table with boolean flag)**:
+  - *Why rejected*: Fails to bind arguments cryptographically; vulnerable to database race conditions and SQL argument modification attacks; does not decouple authorization proof from database state.
+- **Generic JWT Auth Tokens for Approvals**:
+  - *Why rejected*: Standard user JWTs authorize the *user identity*, not a specific *action with specific parameter values*. An approval token must be strictly single-use and bound to `(run_id, action, sha256(args))`.
+
+---
+
+### (d) Trade-offs and risks
+- **Replay cache memory growth**:
+  - Consumed token IDs are stored in an in-memory set in the local manager.
+  - *Mitigation*: In Phase 5 (Async & Scale), consumed tokens are stored in Redis with an automatic TTL matching the token's expiration window (`SET token:{id} 1 EX 1800`), ensuring self-cleaning memory bounds.
+
+---
+
+### (e) Non-trivial concepts explained simply
+
+#### 1. Why Argument-Bound Token Signing is Essential
+```
+[User Goal] ──> Agent plans: "UPDATE users SET tier='pro' WHERE id=42"
+                      │
+                      ▼
+            Governance Gate (Tier 2 Detected)
+                      │
+                      ▼ (Generates Approval Request)
+            Human Approver reviews exact SQL: "UPDATE users SET tier='pro' WHERE id=42"
+                      │
+                      ▼ (Clicks Approve)
+            Platform computes:
+            PayloadHash = SHA256('{"sql":"UPDATE users SET tier=\'pro\' WHERE id=42"}')
+            Token = Sign(run_id, "run_sql_write", PayloadHash, expires_at)
+                      │
+                      ▼
+[Attacker Attempts Injection]: "DROP TABLE users;"
+                      │
+                      ▼
+            Governance Gate Verification:
+            CurrentHash = SHA256('{"sql":"DROP TABLE users;"}')
+            Does CurrentHash == Token.PayloadHash? NO!
+                      │
+                      ▼
+            BLOCKED! Error: ARGUMENTS_TAMPERED
+```
+
+#### 2. Replay Protection (Single-Use Tokens)
+Even if an attacker intercepts an approval token for `send_webhook {"amount": 500}`, they cannot replay the request:
+1. Request 1 executes: Token is checked, verified, and its `token_id` is recorded in `_consumed_token_ids`.
+2. Request 2 arrives with identical token: Token manager sees `token_id in consumed_tokens` $\rightarrow$ Replay rejected with `TOKEN_ALREADY_CONSUMED`.
+
+---
+
+### (f) How to verify it works
+1. Run token and governance unit tests:
+   ```bash
+   .\.venv\Scripts\pytest.exe tests/unit/test_tokens.py tests/unit/test_governance.py -v
+   ```
+   *Expected output*: 15 passed in <0.5s.
+2. Run strict linting and type checking:
+   ```bash
+   .\.venv\Scripts\ruff.exe check libs/guardrails tests/unit/test_tokens.py tests/unit/test_governance.py
+   .\.venv\Scripts\mypy.exe libs/guardrails tests/unit/test_tokens.py tests/unit/test_governance.py
+   ```
+   *Expected output*: All checks passed across 5 source files.
+
+---
+
+### Architecture Decision Record: ADR-009 — Cryptographic Argument-Bound Tokens for HITL Governance
+
+- **Status**: Accepted
+- **Date**: 2026-10-07
+- **Context**:
+  PRD Section 3.15 and Section 3.2 mandate risk-tiered human-in-the-loop governance for all high-risk write operations. We must guarantee that an approved action cannot be altered or replayed between human sign-off and tool execution.
+- **Decision**:
+  1. Mandate HMAC-SHA256 signed single-use approval tokens bound to `(run_id, tenant_id, action, SHA256(canonical_json(arguments)), expires_at)`.
+  2. Implement canonical JSON serialization with sorted keys to ensure deterministic hashing.
+  3. Classify all platform actions into a 4-tier risk hierarchy (Tier 0 Read-Only, Tier 1 Low-Risk, Tier 2 High-Risk Write, Tier 3 Prohibited).
+  4. Enforce that any Tier 2 action strictly requires a verified, unconsumed approval token before execution.
+- **Consequences**:
+  - Argument tampering and prompt-injection mutation attacks against pending approvals are mathematically prevented.
+  - Replay attacks against destructive or financial actions are eliminated.
+  - Satisfies the P0 HITL Governance mandate prior to building specialist agents in Phase 4.
