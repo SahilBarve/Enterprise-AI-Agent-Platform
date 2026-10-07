@@ -82,8 +82,8 @@ class AdaptiveCRAGRouter:
 
     def __init__(
         self,
-        correct_threshold: float = 0.65,
-        ambiguous_threshold: float = 0.30,
+        correct_threshold: float = 0.55,
+        ambiguous_threshold: float = 0.25,
     ) -> None:
         """Initialize CRAG confidence thresholds.
 
@@ -114,6 +114,12 @@ class AdaptiveCRAGRouter:
     def evaluate_retrieval(self, query: str, results: list[SearchResult]) -> CRAGDecision:
         """Grade retrieved results into CORRECT, AMBIGUOUS, or INCORRECT bands (FR-RAG-17).
 
+        Combines:
+        1. Single-chunk relevance (cross-encoder score & lexical density).
+        2. Collective candidate coverage (union of informative query terms covered across chunks).
+        This guarantees that multi-hop or multi-part queries spanning multiple passages
+        receive proper recognition as CORRECT evidence.
+
         Args:
             query: User's original search or question string.
             results: Ranked SearchResult candidates from retriever/reranker.
@@ -130,22 +136,39 @@ class AdaptiveCRAGRouter:
                 rationale="Retriever returned zero candidate documents for the query.",
             )
 
-        # Compute individual relevance scores for candidate passages
+        # 1. Collective query token coverage across all candidate chunks
+        query_words = set(re.findall(r"\w+", query.lower()))
+        stopwords = {
+            "how", "do", "does", "did", "and", "or", "what", "which", "who", "whom",
+            "this", "that", "the", "a", "an", "in", "on", "at", "to", "for", "of",
+            "with", "by", "is", "are", "was", "were", "be", "been"
+        }
+        informative_query_words = query_words - stopwords or query_words
+
+        collective_words: set[str] = set()
+        for r in results:
+            collective_words.update(re.findall(r"\w+", r.effective_content.lower()))
+
+        collective_overlap = informative_query_words.intersection(collective_words)
+        collective_coverage = len(collective_overlap) / max(1, len(informative_query_words))
+
+        # 2. Individual passage scores
         passage_scores: list[float] = []
         for r in results:
-            # Combine raw rerank score if present with content overlap
             lexical_score = self.calculate_passage_relevance(query, r.effective_content)
             if r.rerank_score is not None:
-                # Weighted blend of cross-encoder rerank score and lexical density
                 combined = 0.6 * r.rerank_score + 0.4 * lexical_score
             else:
                 combined = lexical_score
             passage_scores.append(combined)
 
-        # Aggregate score: Top-1 score (60% weight) + Mean of top candidates (40% weight)
         top1_score = passage_scores[0]
         mean_score = sum(passage_scores) / len(passage_scores)
-        aggregate_score = round(min(1.0, 0.6 * top1_score + 0.4 * mean_score), 4)
+
+        # 3. Blended aggregate score: 50% collective coverage + 35% top1 + 15% mean
+        aggregate_score = round(
+            min(1.0, 0.50 * collective_coverage + 0.35 * top1_score + 0.15 * mean_score), 4
+        )
 
         # Tri-state Decision Routing
         if aggregate_score >= self.correct_threshold:

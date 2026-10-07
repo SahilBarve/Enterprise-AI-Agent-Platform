@@ -174,17 +174,25 @@ class CrossEncoderReranker:
         if not candidates:
             return []
 
-        # 1. Score all candidates
-        scores = self.score_candidates(query, candidates)
-        for cand, score in zip(candidates, scores, strict=True):
+        # 1. Deduplicate candidates by chunk_id (preserving original candidate order)
+        seen_chunks: set[str] = set()
+        unique_candidates: list[SearchResult] = []
+        for cand in candidates:
+            if cand.chunk_id not in seen_chunks:
+                seen_chunks.add(cand.chunk_id)
+                unique_candidates.append(cand)
+
+        # 2. Score all unique candidates
+        scores = self.score_candidates(query, unique_candidates)
+        for cand, score in zip(unique_candidates, scores, strict=True):
             cand.rerank_score = score
             cand.score = score
 
-        # 2. Filter by min_score
+        # 3. Filter by min_score
         valid_candidates = (
-            [c for c in candidates if c.rerank_score is not None and c.rerank_score >= min_score]
+            [c for c in unique_candidates if c.rerank_score is not None and c.rerank_score >= min_score]
             if min_score is not None
-            else list(candidates)
+            else list(unique_candidates)
         )
 
         if not valid_candidates:

@@ -8,9 +8,9 @@ Why Dependency Injection (DI) with @lru_cache in FastAPI?
    Deep learning models (like embedding models or cross-encoders) take hundreds of
    megabytes of RAM and several seconds to load into memory. If we initialized
    a new model on every HTTP request, endpoint latency would exceed 3,000ms!
-   By decorating factory functions (`get_dense_model`, `get_reranker`, `get_sparse_encoder`)
-   with `@lru_cache`, Python instantiates the model once as a singleton and reuses it
-   across all concurrent requests.
+   By decorating factory functions (`get_dense_model`, `get_reranker`, `get_sparse_encoder`,
+   `get_semantic_cache`) with `@lru_cache`, Python instantiates the model once as a singleton
+   and reuses it across all concurrent requests.
 
 2. Inversion of Control & Testability:
    Endpoints depend on abstract interfaces (like `LLMProvider`) or factory functions
@@ -26,9 +26,9 @@ Why Dependency Injection (DI) with @lru_cache in FastAPI?
                  \                |                 /
                          get_indexer()
                               |
-                        get_retriever()
-                              |
-                     get_rag_generator()
+                        get_retriever()    get_semantic_cache()   get_context_compressor()
+                              \                     |                    /
+                                       get_rag_generator()
    FastAPI resolves this Directed Acyclic Graph (DAG) automatically for every request.
 ================================================================================
 """
@@ -41,7 +41,10 @@ from qdrant_client import QdrantClient
 
 from libs.common.config import PlatformSettings, get_settings
 from libs.llm.provider import LLMProvider, MockLLMProvider
+from libs.retrieval.cache import SemanticCache
 from libs.retrieval.citations import CitationEngine
+from libs.retrieval.compressor import ContextCompressor
+from libs.retrieval.crag import AdaptiveCRAGRouter
 from libs.retrieval.embeddings import DenseEmbeddingModel
 from libs.retrieval.generator import RAGGenerator
 from libs.retrieval.hybrid import HybridRetriever
@@ -127,16 +130,50 @@ def get_llm_provider() -> LLMProvider:
     return MockLLMProvider()
 
 
+@lru_cache
+def get_semantic_cache() -> SemanticCache:
+    """Provide singleton instance of the two-tier semantic cache (FR-RAG-18)."""
+    return SemanticCache(
+        similarity_threshold=0.92,
+        default_ttl_seconds=3600,
+        min_confidence_to_cache=0.6,
+    )
+
+
+@lru_cache
+def get_context_compressor() -> ContextCompressor:
+    """Provide singleton instance of the context compressor and token budgeter (FR-RAG-23 to FR-RAG-25)."""
+    return ContextCompressor(
+        default_max_tokens=1500,
+        enable_lost_in_middle_reorder=True,
+    )
+
+
+@lru_cache
+def get_crag_router() -> AdaptiveCRAGRouter:
+    """Provide singleton instance of the Adaptive Corrective RAG router (FR-RAG-17)."""
+    return AdaptiveCRAGRouter(
+        correct_threshold=0.65,
+        ambiguous_threshold=0.30,
+    )
+
+
 def get_rag_generator(
     retriever: Annotated[HybridRetriever, Depends(get_retriever)],
     reranker: Annotated[CrossEncoderReranker, Depends(get_reranker)],
     citation_engine: Annotated[CitationEngine, Depends(get_citation_engine)],
     llm_provider: Annotated[LLMProvider, Depends(get_llm_provider)],
+    cache: Annotated[SemanticCache, Depends(get_semantic_cache)],
+    compressor: Annotated[ContextCompressor, Depends(get_context_compressor)],
+    crag_router: Annotated[AdaptiveCRAGRouter, Depends(get_crag_router)],
 ) -> RAGGenerator:
-    """Assemble end-to-end RAG question answering pipeline coordinator."""
+    """Assemble end-to-end optimized RAG question answering pipeline coordinator."""
     return RAGGenerator(
         retriever=retriever,
         reranker=reranker,
         citation_engine=citation_engine,
         llm_provider=llm_provider,
+        cache=cache,
+        compressor=compressor,
+        crag_router=crag_router,
     )

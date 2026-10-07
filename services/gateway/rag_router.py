@@ -15,13 +15,14 @@ acts as an authenticated, observable, and rate-limited boundary:
    zero cross-tenant data access.
 
 2. Unified Ingestion Lifecycle:
-   The `/documents` endpoint chains the entire Phase 1 pipeline:
+   The `/documents` endpoint chains the entire pipeline:
    `DocumentParser` (extracts blocks & hashes) -> `DocumentChunker` (splits text) ->
-   `QdrantHybridIndexer` (embeds dense + sparse vectors & stores payload).
+   `QdrantHybridIndexer` (embeds dense + sparse vectors & stores payload) ->
+   `SemanticCache` (invalidates stale cached queries for this collection).
 
-3. Two Retrieval Modalities:
-   - `/search`: Semantic search for agents that need raw ranked document chunks.
-   - `/query`: Complete question answering with synthesized LLM response,
+3. Optimized Query Endpoint with Caching & Compression:
+   - `/query`: Complete question answering with two-tier semantic cache (Tier 1 exact,
+     Tier 2 semantic embedding match), Adaptive CRAG grading, context compression,
      inline `[N]` citation provenance, and claim groundedness auditing.
 ================================================================================
 """
@@ -32,6 +33,7 @@ from fastapi import APIRouter, Depends, Query, status
 from pydantic import BaseModel, Field
 
 from libs.common.logging import get_logger
+from libs.retrieval.cache import SemanticCache
 from libs.retrieval.chunker import DocumentChunker
 from libs.retrieval.citations import GroundedAnswer
 from libs.retrieval.generator import RAGGenerator
@@ -45,6 +47,7 @@ from services.gateway.dependencies import (
     get_rag_generator,
     get_reranker,
     get_retriever,
+    get_semantic_cache,
 )
 
 logger = get_logger("gateway.rag")
@@ -122,6 +125,12 @@ class QueryRequest(BaseModel):
     expand_parent: bool = Field(
         default=True, description="Expand context using parent documents (small-to-big)"
     )
+    use_cache: bool = Field(
+        default=True, description="Enable two-tier exact and semantic response caching (FR-RAG-18)"
+    )
+    max_context_tokens: int | None = Field(
+        default=1500, description="Maximum token budget for prompt context (FR-RAG-24)"
+    )
 
 
 @router.post(
@@ -156,12 +165,14 @@ def ingest_document(
     collection_id: str,
     req: IngestDocumentRequest,
     indexer: Annotated[QdrantHybridIndexer, Depends(get_indexer)],
+    cache: Annotated[SemanticCache, Depends(get_semantic_cache)],
 ) -> IngestDocumentResponse:
     """Ingest a document through the complete parsing and indexing pipeline:
 
     1. Parse: Structure raw content into layout blocks and compute SHA-256 hash.
     2. Chunk: Apply selected chunking strategy (e.g. recursive, parent-child).
     3. Index: Generate dense and BM25 sparse vectors and batch upsert into Qdrant.
+    4. Invalidate: Automatically clear stale cached queries for this collection (FR-RAG-20).
     """
     col_name = indexer.get_collection_name(req.tenant_id, collection_id)
 
@@ -196,6 +207,9 @@ def ingest_document(
     # 3. Index into Qdrant
     indexed_count = indexer.index_chunks(col_name, chunks)
 
+    # 4. Invalidate collection cache upon new ingestion (FR-RAG-20)
+    cache.invalidate_collection(req.tenant_id, collection_id)
+
     logger.info(
         "Document ingested and indexed",
         tenant_id=req.tenant_id,
@@ -221,10 +235,12 @@ def delete_document(
     document_id: str,
     tenant_id: Annotated[str, Query(description="Mandatory tenant ID for isolation")],
     indexer: Annotated[QdrantHybridIndexer, Depends(get_indexer)],
+    cache: Annotated[SemanticCache, Depends(get_semantic_cache)],
 ) -> dict[str, str]:
-    """Delete all chunks belonging to a document while strictly scoping to tenant_id."""
+    """Delete all chunks belonging to a document and invalidate the collection cache."""
     col_name = indexer.get_collection_name(tenant_id, collection_id)
     indexer.delete_document(col_name, tenant_id=tenant_id, document_id=document_id)
+    cache.invalidate_collection(tenant_id, collection_id)
     return {"status": "deleted", "document_id": document_id}
 
 
@@ -266,18 +282,20 @@ def search(
 @router.post(
     "/query",
     response_model=GroundedAnswer,
-    summary="Execute end-to-end question answering with inline citations and groundedness check",
+    summary="Execute end-to-end question answering with caching, compression, and citations",
 )
 def query(
     req: QueryRequest,
     generator: Annotated[RAGGenerator, Depends(get_rag_generator)],
 ) -> GroundedAnswer:
-    """Execute end-to-end RAG question answering:
+    """Execute end-to-end optimized RAG question answering:
 
-    1. Retrieves relevant passages using hybrid search and reranking.
-    2. Refuses to answer if evidence is missing or below `min_relevance`.
-    3. Synthesizes an answer using the LLM with bracketed source citations `[N]`.
-    4. Audits claims for factual grounding against the cited context passages.
+    1. Checks two-tier semantic cache (Tier 1 exact, Tier 2 semantic similarity).
+    2. Retrieves relevant passages using hybrid search and reranking.
+    3. Evaluates retrieval via Adaptive CRAG (rewrites if ambiguous, refuses if incorrect).
+    4. Compresses context, reorders to mitigate 'lost in the middle', and applies token budgets.
+    5. Synthesizes an answer using the LLM with bracketed source citations `[N]`.
+    6. Audits claims for factual grounding against the cited context passages.
     """
     return generator.generate(
         query=req.query,
@@ -286,4 +304,35 @@ def query(
         top_k=req.top_k,
         min_relevance=req.min_relevance,
         expand_parent=req.expand_parent,
+        use_cache=req.use_cache,
+        max_context_tokens=req.max_context_tokens,
     )
+
+
+@router.post(
+    "/collections/{collection_id}/cache/invalidate",
+    status_code=status.HTTP_200_OK,
+    summary="Invalidate semantic and exact cache for a collection (FR-RAG-20)",
+)
+def invalidate_collection_cache(
+    collection_id: str,
+    tenant_id: Annotated[str, Query(description="Mandatory tenant ID for isolation")],
+    cache: Annotated[SemanticCache, Depends(get_semantic_cache)],
+) -> dict[str, Any]:
+    """Invalidate all cached responses for a specific collection."""
+    count = cache.invalidate_collection(tenant_id, collection_id)
+    return {"status": "invalidated", "collection_id": collection_id, "entries_cleared": count}
+
+
+@router.post(
+    "/tenants/{tenant_id}/cache/flush",
+    status_code=status.HTTP_200_OK,
+    summary="Flush all cached responses for a tenant (FR-RAG-21)",
+)
+def flush_tenant_cache(
+    tenant_id: str,
+    cache: Annotated[SemanticCache, Depends(get_semantic_cache)],
+) -> dict[str, Any]:
+    """Admin flush: clear all cached responses across all collections for a tenant."""
+    count = cache.flush_tenant(tenant_id)
+    return {"status": "flushed", "tenant_id": tenant_id, "entries_cleared": count}

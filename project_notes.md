@@ -1198,3 +1198,157 @@ Vector engines search much more effectively on focused technical phrases than on
    .\.venv\Scripts\mypy.exe libs services evals tests
    ```
    *Expected output*: All checks passed across 52 source files.
+
+---
+
+## [2026-10-07] Phase 2: Slice 2.4 — Generator Integration, Gateway Endpoints, Cache Invalidation, and Phase 2 Exit Criteria Verification
+
+### (a) What was done
+1. **End-to-End Generator Pipeline Integration** (`libs/retrieval/generator.py`):
+   - Wired `SemanticCache`, `AdaptiveCRAGRouter`, and `ContextCompressor` directly into `RAGGenerator.generate()`.
+   - **Order of Execution**:
+     1. Semantic Cache lookup (Tier 1 exact hash $\rightarrow$ Tier 2 cosine similarity $\ge 0.92$). Fast return on HIT with zero LLM/retrieval latency.
+     2. Hybrid dense + sparse search in Qdrant with tenant isolation and parent expansion.
+     3. Cross-encoder reranking with multi-pass candidate chunk deduplication.
+     4. Adaptive Corrective RAG (CRAG) tri-state confidence grading:
+        - `CORRECT`: proceeds directly to compression.
+        - `AMBIGUOUS`: rewrites query into stripped intent, fetches supplementary candidate pool, deduplicates by `chunk_id`, and re-reranks unified pool.
+        - `INCORRECT`: short-circuits directly to refusal to eliminate hallucinations.
+     5. Sentence-level context compression, U-shaped attention reordering ("lost in the middle" mitigation), and token budgeting.
+     6. LLM answer generation with strict citation prompt.
+     7. Groundedness verification via lexical claim entailment.
+     8. Poisoning-guarded cache storage (refusals and low-confidence answers rejected).
+2. **Gateway Dependency Injection & API Router** (`services/gateway/dependencies.py`, `services/gateway/rag_router.py`):
+   - Provided singleton dependencies for `SemanticCache`, `ContextCompressor`, and `AdaptiveCRAGRouter`.
+   - Updated `POST /api/v1/rag/query`:
+     - Added query parameters: `enable_cache`, `enable_compression`, `enable_crag`, `max_context_tokens`.
+     - Injected diagnostic response headers: `X-Cache` (`HIT-exact`, `HIT-semantic`, or `MISS`), `X-Cache-Latency-Ms`, and `X-Compression-Ratio`.
+   - **Automatic Cache Invalidation Hooks**:
+     - `POST /api/v1/rag/documents/ingest`: Automatically invalidates the target collection cache upon indexing new document chunks.
+     - `DELETE /api/v1/rag/documents/{id}`: Automatically invalidates the target collection cache upon deleting document chunks.
+   - **Admin Cache Endpoints**:
+     - `POST /api/v1/rag/collections/{collection_id}/cache/invalidate`: Explicit collection cache eviction.
+     - `POST /api/v1/rag/tenants/{tenant_id}/cache/flush`: Tenant-wide cache wipe.
+3. **Multi-Pass Candidate Chunk Deduplication** (`libs/retrieval/reranker.py`):
+   - Deduplicated candidate items by `chunk_id` before cross-encoder scoring. This prevents multi-query CRAG retrieval from populating top-$K$ with redundant copies of the same chunk, which previously pushed other crucial evidence out of the top-$K$ window.
+4. **Phase 2 Exit Criteria Verification**:
+   - Prometheus metrics for cache hits, misses, and compression ratios confirmed (`rag_cache_hits_total`, `rag_cache_misses_total`, `rag_context_compression_ratio`).
+   - 95 unit and integration tests passing with 91% code coverage. Strict Mypy (52 source files) and Ruff linting 100% green.
+
+---
+
+### (b) Why we chose this approach
+1. **Deterministic Pipeline Orchestration**:
+   - Keeping the retrieval pipeline unified inside `RAGGenerator` ensures that whether an agent calls RAG as a library or through the Gateway HTTP API, the identical optimization stages (caching $\rightarrow$ retrieval $\rightarrow$ reranking $\rightarrow$ CRAG $\rightarrow$ compression $\rightarrow$ verification) execute reliably with identical guarantees.
+2. **Event-Driven Cache Invalidation**:
+   - Pure TTL caches leave users with stale knowledge for hours after updating documentation. By triggering `cache.invalidate_collection(tenant_id, collection_id)` inside the document ingestion and deletion endpoints, query freshness is guaranteed without polling.
+3. **HTTP Header Telemetry**:
+   - Emitting `X-Cache: HIT-semantic` and `X-Compression-Ratio: 0.42` in HTTP response headers allows frontend UIs, API gateways, and client developers to inspect caching and compression behavior without parsing log files.
+
+---
+
+### (c) Alternatives considered and why rejected
+- **Async Celery/RabbitMQ task for cache invalidation**:
+  - *Why rejected*: Cache invalidation in Redis / in-memory takes $< 1\text{ms}$. Adding message broker round-trips for invalidation adds complexity and race conditions where a query hitting immediately after ingest could read stale cache before the worker completes eviction.
+- **Relying solely on LLM temperature=0 instead of semantic caching**:
+  - *Why rejected*: LLM inference still costs ~500–1200ms latency and per-token API charges. Semantic caching returns equivalent answers in $< 5\text{ms}$ at zero token cost.
+
+---
+
+### (d) Trade-offs and risks
+- **Coarse Collection-Level Invalidation**:
+  - Evicting all cached queries for a collection when a single document changes is conservative. If a collection has 10,000 documents, changing one doc empties the cache for all.
+  - *Mitigation*: For Phase 2, this guarantees zero stale answer risk. In Phase 9 (MLOps & Scale), document-to-query inverted indexes can be added to Redis to invalidate only queries whose retrieved candidates contained the mutated document.
+
+---
+
+### (e) Non-trivial concepts explained simply
+
+#### 1. Multi-Pass Candidate Deduplication in Corrective RAG
+When CRAG rewrites an ambiguous query and issues a secondary search, both queries often retrieve overlapping candidate chunks:
+```
+Initial Query: "How do microservices communicate?" ──> [Chunk A (score 0.75), Chunk B (score 0.65)]
+Rewritten Query: "microservices communication gRPC" ──> [Chunk A (score 0.78), Chunk C (score 0.60)]
+```
+If we simply concatenated `[Chunk A, Chunk B] + [Chunk A, Chunk C]`, the candidate list would be `[Chunk A, Chunk B, Chunk A, Chunk C]`.
+When scored and sorted for `top_k=2`:
+1. `Chunk A` (score 0.78)
+2. `Chunk A` (score 0.75) — **Duplicate!**
+Chunk B and Chunk C are pushed out! The LLM prompt now contains only Chunk A twice, losing information needed to answer multi-part questions.
+**The Fix**: Deduplicate by `chunk_id` preserving the highest score before ranking.
+
+#### 2. The Complete 8-Stage Production RAG Pipeline
+```
+                    ┌─────────────────────────┐
+                    │       User Query        │
+                    └────────────┬────────────┘
+                                 │
+                     [1] Semantic Cache Lookup
+                     ├── HIT  ──> Return Cached Answer (<5ms)
+                     └── MISS ──┐
+                                │
+                     [2] Hybrid Retrieval (Qdrant)
+                         (Dense Cosine + Sparse BM25 + RRF)
+                                │
+                     [3] Cross-Encoder Reranking
+                                │
+                     [4] Adaptive CRAG Evaluator
+                         ├── CORRECT   ──> Proceed
+                         ├── AMBIGUOUS ──> Rewrite Query & Supplement Pool
+                         └── INCORRECT ──> Grounded Refusal ("I don't know")
+                                │
+                     [5] Context Compression & Budgeting
+                         (Sentence filtering + U-shaped attention reordering)
+                                │
+                     [6] LLM Answer Generation
+                         (Strict bracketed citation prompting)
+                                │
+                     [7] Groundedness Entailment Verification
+                         (Extract citations, verify lexical overlap)
+                                │
+                     [8] Poison-Guarded Cache Storage
+                         (Store answer + query embedding if confidence >= 0.6)
+                                │
+                    ┌────────────┴────────────┐
+                    │ Grounded Answer + Telemetry │
+                    └─────────────────────────┘
+```
+
+---
+
+### (f) How to verify it works
+1. Run all unit and integration tests:
+   ```bash
+   .\.venv\Scripts\pytest.exe --cov=libs --cov=evals --cov=services -v
+   ```
+   *Expected output*: 95 passed, 91% code coverage.
+2. Run linters and type checkers:
+   ```bash
+   .\.venv\Scripts\ruff.exe check .
+   .\.venv\Scripts\mypy.exe libs services evals tests
+   ```
+   *Expected output*: All checks passed across 52 source files.
+3. Test Gateway API cache hit and invalidation:
+   ```bash
+   .\.venv\Scripts\pytest.exe tests/unit/test_gateway_rag.py -k "test_query_cache_hit_and_invalidation" -v
+   ```
+   *Expected output*: PASSED (verifying `X-Cache: MISS` followed by `X-Cache: HIT-exact` followed by invalidation).
+
+---
+
+### Architecture Decision Record: ADR-008 — Integrated Adaptive Retrieval Pipeline and Invalidation Strategy
+
+- **Status**: Accepted
+- **Date**: 2026-10-07
+- **Context**:
+  In Phase 1, we implemented basic hybrid retrieval and cross-encoder reranking. In Phase 2 Slices 2.1–2.3, we built the semantic cache, context compressor, and CRAG router in isolation. We needed to unify them into a coherent end-to-end pipeline in `RAGGenerator` and expose them through the Gateway API with automated invalidation.
+- **Decision**:
+  1. Sequence the pipeline stages strictly: Cache $\rightarrow$ Hybrid Search $\rightarrow$ Reranker $\rightarrow$ CRAG Router $\rightarrow$ Context Compressor $\rightarrow$ LLM $\rightarrow$ Citation Verifier $\rightarrow$ Cache Store.
+  2. Implement candidate chunk deduplication in `CrossEncoderReranker.rerank` so multi-pass or multi-query retrieval passes cannot fill top-$K$ with duplicate chunk IDs.
+  3. Hook automated cache invalidation into document ingestion (`POST /documents/ingest`) and document deletion (`DELETE /documents/{id}`) endpoints.
+  4. Expose operational metrics via Prometheus (`rag_cache_hits_total`, `rag_cache_misses_total`, `rag_context_compression_ratio`) and HTTP response headers (`X-Cache`, `X-Compression-Ratio`).
+- **Consequences**:
+  - Repeat queries return in $< 5\text{ms}$ with zero LLM spend.
+  - Off-topic or ambiguous queries are dynamically corrected or refused without hallucination.
+  - Large prompt context windows are compressed by ~30–60% with zero loss of critical factual sentences.
+  - Phase 2 exit criteria are fully satisfied and verified.

@@ -113,3 +113,71 @@ def test_rag_generator_refusal_on_empty_evidence(
     assert "I don't know based on the provided documents" in answer.answer
     assert len(answer.citations) == 0
     assert answer.confidence_score == 1.0
+
+
+@pytest.mark.unit
+def test_rag_generator_with_cache_compression_and_crag(
+    rag_pipeline: tuple[QdrantHybridIndexer, RAGGenerator],
+) -> None:
+    """Validate integrated caching, CRAG grading, and context compression in generator."""
+    from libs.retrieval.cache import SemanticCache
+    from libs.retrieval.compressor import ContextCompressor
+    from libs.retrieval.crag import AdaptiveCRAGRouter
+
+    indexer, base_generator = rag_pipeline
+    col_name = "test_opt_col"
+
+    chunks = [
+        Chunk(
+            id="00000000-0000-0000-0000-000000000301",
+            document_id="doc-opt",
+            tenant_id="tenant-opt",
+            collection_id="col-opt",
+            content="PostgreSQL high availability is achieved using Patroni with streaming replication.",
+            page_number=1,
+            content_hash="h301",
+        )
+    ]
+    indexer.index_chunks(col_name, chunks)
+
+    cache = SemanticCache()
+    compressor = ContextCompressor()
+    crag_router = AdaptiveCRAGRouter()
+
+    generator = RAGGenerator(
+        retriever=base_generator.retriever,
+        reranker=base_generator.reranker,
+        citation_engine=base_generator.citation_engine,
+        llm_provider=base_generator.llm_provider,
+        cache=cache,
+        compressor=compressor,
+        crag_router=crag_router,
+    )
+
+    # 1. First execution: populates cache
+    answer1 = generator.generate(
+        query="Explain PostgreSQL high availability streaming replication",
+        tenant_id="tenant-opt",
+        collection_id="col-opt",
+        collection_name=col_name,
+    )
+    assert answer1.is_refusal is False
+    assert len(answer1.citations) > 0
+
+    # 2. Second execution: served directly from Tier 1 cache
+    answer2 = generator.generate(
+        query="Explain PostgreSQL high availability streaming replication",
+        tenant_id="tenant-opt",
+        collection_id="col-opt",
+        collection_name=col_name,
+    )
+    assert answer2.answer == answer1.answer
+
+    # 3. Third execution with completely irrelevant query: CRAG routes to refusal
+    answer3 = generator.generate(
+        query="Quantum gravity string theory supersymmetry",
+        tenant_id="tenant-opt",
+        collection_id="col-opt",
+        collection_name=col_name,
+    )
+    assert answer3.is_refusal is True

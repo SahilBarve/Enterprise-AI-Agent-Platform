@@ -188,3 +188,53 @@ def test_cross_tenant_isolation_via_api(client: TestClient) -> None:
     assert res_beta.status_code == 200
     # Beta's isolated collection does not contain Alpha's document
     assert len(res_beta.json()) == 0
+
+
+@pytest.mark.unit
+def test_query_cache_hit_and_invalidation(client: TestClient) -> None:
+    """Validate query caching and cache invalidation via gateway endpoints (FR-RAG-18, FR-RAG-20, FR-RAG-21)."""
+    tenant_id = "tenant-cache"
+    collection_id = "cache-kb"
+
+    # Ingest document
+    client.post(
+        f"/api/v1/collections/{collection_id}/documents",
+        json={
+            "tenant_id": tenant_id,
+            "title": "PgBouncer Scaling",
+            "content": "PgBouncer pool_mode transaction enables massive client connection scaling.",
+        },
+    )
+
+    query_payload = {
+        "query": "What pool_mode enables connection scaling in PgBouncer?",
+        "tenant_id": tenant_id,
+        "collection_id": collection_id,
+        "use_cache": True,
+    }
+
+    # 1. First query execution (populates cache)
+    res1 = client.post("/api/v1/query", json=query_payload)
+    assert res1.status_code == 200
+    data1 = res1.json()
+    assert "PgBouncer" in data1["answer"]
+
+    # 2. Second query execution (hits cache)
+    res2 = client.post("/api/v1/query", json=query_payload)
+    assert res2.status_code == 200
+    data2 = res2.json()
+    assert data2["answer"] == data1["answer"]
+
+    # 3. Invalidate collection cache endpoint
+    inv_res = client.post(
+        f"/api/v1/collections/{collection_id}/cache/invalidate?tenant_id={tenant_id}"
+    )
+    assert inv_res.status_code == 200
+    assert inv_res.json()["status"] == "invalidated"
+
+    # 4. Flush tenant cache endpoint
+    flush_res = client.post(
+        f"/api/v1/tenants/{tenant_id}/cache/flush"
+    )
+    assert flush_res.status_code == 200
+    assert flush_res.json()["status"] == "flushed"

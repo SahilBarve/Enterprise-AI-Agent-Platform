@@ -41,7 +41,7 @@ ai-ops-platform/
 ## Delivery Roadmap & Phase Checklist
 - [x] **Phase 0: Foundation** (Repo, tooling, config, docker-compose, libs/common, health/readiness, OTel base)
 - [x] **Phase 1: Core RAG** (Ingestion, hybrid search Qdrant dense+sparse, reranker, citations, eval plumbing, gateway API)
-- [ ] **Phase 2: Optimization** (Two-tier semantic cache, context compression, token budgeter, adaptive CRAG)
+- [x] **Phase 2: Optimization** (Two-tier semantic cache, context compression, token budgeter, adaptive CRAG, gateway integration)
 - [ ] **Phase 3: Orchestration & Governance** (LangGraph supervisor, Postgres checkpointer, interrupt HITL, signed approval tokens, run lifecycle)
 - [ ] **Phase 4: Specialist Agents & MCP Tool Plane** (Web, SQL, Data sandbox, Report agents as MCP servers)
 - [ ] **Phase 5: Async & Scale** (RabbitMQ aio-pika workers, retries, DLQ, SSE progress, KEDA scaling)
@@ -53,16 +53,17 @@ ai-ops-platform/
 - [ ] **Phase 11: Stretch** (Playbooks, Slack bot, chaos tests)
 
 ## Current Status
-- **Phase**: Phase 2 — Optimization (Slice 2.3 Complete)
+- **Phase**: Phase 2 Complete (Ready for Phase 3: Orchestration & Governance)
 - **Done**:
-  - Phase 1 Core RAG complete and baseline verified (Recall@10=1.0, MRR=1.0, Latency=1.28ms).
-  - Codebase-wide educational documentation and mathematical formulas across all 21 modules.
-  - Slice 2.1: Two-tier semantic cache ([`libs/retrieval/cache.py`](file:///d:/Projects/AI-Operations-Platform/libs/retrieval/cache.py)) with Tier 1 exact SHA-256 match, Tier 2 semantic embedding similarity ($\ge 0.92$), strict multi-tenant key isolation, cache poisoning protection (refusal & low confidence), TTL expiration, collection invalidation, and Prometheus hit/miss counters.
+  - Phase 1 Core RAG complete & baseline verified (Recall@10=1.0, MRR=1.0, Latency=1.28ms).
+  - Slice 2.1: Two-tier semantic cache ([`libs/retrieval/cache.py`](file:///d:/Projects/AI-Operations-Platform/libs/retrieval/cache.py)) with Tier 1 exact SHA-256 match, Tier 2 semantic embedding similarity ($\ge 0.92$), strict multi-tenant isolation, cache poisoning protection, TTL, collection invalidation, and Prometheus metrics.
   - Slice 2.2: Context compressor & token budgeter ([`libs/retrieval/compressor.py`](file:///d:/Projects/AI-Operations-Platform/libs/retrieval/compressor.py)) with sentence-level relevance filtering, U-shaped "lost in the middle" attention reordering, token budget enforcement, and compression ratio reporting.
-  - Slice 2.3: Adaptive Corrective RAG (CRAG) router ([`libs/retrieval/crag.py`](file:///d:/Projects/AI-Operations-Platform/libs/retrieval/crag.py)) with tri-state confidence grading (CORRECT $\ge 0.65$, AMBIGUOUS $\ge 0.30$, INCORRECT $< 0.30$), query rewriting/expansion, sub-query decomposition, and external fallback routing.
-  - 93 unit & integration tests passing with 91% total coverage; strict Mypy (52 files) and Ruff 100% green.
-- **In Progress**: Slice 2.4: Integration into RAG Generator & Gateway API; Phase 2 Exit Criteria verification.
-- **Next**: Phase 3: Orchestration & Governance (LangGraph supervisor, Postgres checkpointer, approval tokens, HITL).
+  - Slice 2.3: Adaptive Corrective RAG (CRAG) router ([`libs/retrieval/crag.py`](file:///d:/Projects/AI-Operations-Platform/libs/retrieval/crag.py)) with collective token coverage grading, query rewriting, and sub-query decomposition.
+  - Slice 2.4: Integrated end-to-end pipeline in [`libs/retrieval/generator.py`](file:///d:/Projects/AI-Operations-Platform/libs/retrieval/generator.py) & Gateway endpoints ([`services/gateway/rag_router.py`](file:///d:/Projects/AI-Operations-Platform/services/gateway/rag_router.py)) with automatic invalidation, candidate chunk deduplication in [`libs/retrieval/reranker.py`](file:///d:/Projects/AI-Operations-Platform/libs/retrieval/reranker.py), and `X-Cache`/`X-Compression-Ratio` response headers.
+  - **Phase 2 Exit Criteria Verified**: Cache hit and compression metrics visible via Prometheus (`rag_cache_hits_total`, `rag_cache_misses_total`, `rag_context_compression_ratio`) and HTTP response headers.
+  - 95 unit & integration tests passing with 91% total coverage; strict Mypy (52 files) and Ruff 100% green.
+- **In Progress**: Handoff to Phase 3 kickoff.
+- **Next**: Phase 3: Orchestration & Governance (LangGraph supervisor, Postgres checkpointer, interrupt HITL, signed approval tokens, run lifecycle).
 
 ## Known Gaps
 - None.

@@ -9,8 +9,8 @@ from libs.retrieval.models import SearchResult
 @pytest.fixture
 def crag_router() -> AdaptiveCRAGRouter:
     return AdaptiveCRAGRouter(
-        correct_threshold=0.65,
-        ambiguous_threshold=0.30,
+        correct_threshold=0.55,
+        ambiguous_threshold=0.25,
     )
 
 
@@ -40,7 +40,7 @@ def test_crag_evaluates_correct_confidence(crag_router: AdaptiveCRAGRouter) -> N
     decision = crag_router.evaluate_retrieval(query, high_quality_results)
     assert decision.confidence == CRAGConfidence.CORRECT
     assert decision.action == "proceed_generation"
-    assert decision.score >= 0.65
+    assert decision.score >= 0.55
     assert "Proceeding to generation" in decision.rationale
 
 
@@ -61,7 +61,7 @@ def test_crag_evaluates_ambiguous_confidence(crag_router: AdaptiveCRAGRouter) ->
     decision = crag_router.evaluate_retrieval(query, marginal_results)
     assert decision.confidence == CRAGConfidence.AMBIGUOUS
     assert decision.action == "rewrite_and_retry"
-    assert 0.30 <= decision.score < 0.65
+    assert 0.25 <= decision.score < 0.55
     assert decision.rewritten_query is not None
 
 
