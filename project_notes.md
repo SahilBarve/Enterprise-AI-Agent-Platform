@@ -807,3 +807,100 @@ In tests, `app.dependency_overrides[get_qdrant_client] = lambda: QdrantClient(lo
 
 
 
+
+
+---
+
+## [2026-10-07] Phase 1 Completion & Codebase-Wide Educational Documentation Pass
+
+### (a) What was done
+1. **Added Comprehensive Educational Comments & Docstrings Across All 21 Source Files**:
+   - **`libs/retrieval/`**:
+     - [`sparse.py`](file:///d:/Projects/AI-Operations-Platform/libs/retrieval/sparse.py): Documented BM25 term frequency saturation equation, document length normalization factor, $k_1$ and $b$ hyperparameter roles, and the 31-bit MD5 hashing trick for distributed vocabulary-free indexing.
+     - [`embeddings.py`](file:///d:/Projects/AI-Operations-Platform/libs/retrieval/embeddings.py): Documented high-dimensional semantic vector spaces, L2 Euclidean normalization (why unit vectors make dot product equivalent to cosine similarity), and deterministic mock vectors.
+     - [`indexer.py`](file:///d:/Projects/AI-Operations-Platform/libs/retrieval/indexer.py): Documented dual named vector schema (`"dense"` + `"sparse"`), keyword payload indices for tenant filtering, point upsert batching, and tenant-isolated cascading deletion.
+     - [`hybrid.py`](file:///d:/Projects/AI-Operations-Platform/libs/retrieval/hybrid.py): Documented Reciprocal Rank Fusion (RRF) smoothing math ($k=60$), multi-stage retrieval architecture, and small-to-big parent context expansion.
+     - [`reranker.py`](file:///d:/Projects/AI-Operations-Platform/libs/retrieval/reranker.py): Documented Cross-Encoder full-attention vs. Bi-Encoder dot product, heuristic token overlap scoring, and Maximal Marginal Relevance (MMR) greedy diversity selection.
+     - [`citations.py`](file:///d:/Projects/AI-Operations-Platform/libs/retrieval/citations.py): Documented provenance graph tracking, `[N]` bracket extraction, hallucination detection (`unmapped_citations`), and lexical claim grounding audits.
+     - [`generator.py`](file:///d:/Projects/AI-Operations-Platform/libs/retrieval/generator.py): Documented end-to-end RAG pipeline coordination, prompt assembly, and insufficient evidence refusal guards.
+     - [`models.py`](file:///d:/Projects/AI-Operations-Platform/libs/retrieval/models.py): Documented domain model separation, small-to-big parent-child chunk modeling (`is_parent`, `parent_id`), and mandatory tenant scope attributes.
+     - [`parser.py`](file:///d:/Projects/AI-Operations-Platform/libs/retrieval/parser.py): Documented layout-aware block parsing, heading hierarchy tracking using a section path stack, markdown table buffering, CSV-to-markdown table normalization, and PDF 1-indexed page extraction for citation provenance.
+     - [`chunker.py`](file:///d:/Projects/AI-Operations-Platform/libs/retrieval/chunker.py): Documented the chunk size dilemma, recursive splitting with sliding window token overlap, heading-aware splitting, table header repeating across slices, and parent-child hierarchy generation.
+   - **`libs/llm/`**:
+     - [`provider.py`](file:///d:/Projects/AI-Operations-Platform/libs/llm/provider.py): Documented the Dependency Inversion Principle via `LLMProvider` protocol, LiteLLM automatic fallback routing, and deterministic mock responses.
+   - **`evals/`**:
+     - [`metrics.py`](file:///d:/Projects/AI-Operations-Platform/evals/metrics.py): Documented Recall@K, MRR, HitRate@K, NDCG@K logarithmic discounting, and lexical faithfulness.
+     - [`runner.py`](file:///d:/Projects/AI-Operations-Platform/evals/runner.py): Documented ablation methodology (`dense_only`, `sparse_only`, `hybrid`, `hybrid_rerank`), latency timing, and metric aggregation.
+   - **`services/gateway/`**:
+     - [`main.py`](file:///d:/Projects/AI-Operations-Platform/services/gateway/main.py): Documented Application Factory pattern, ASGI lifespan context managers, middleware ordering (correlation ID before CORS), RFC 7807 error translation, and Kubernetes liveness/readiness probes.
+     - [`rag_router.py`](file:///d:/Projects/AI-Operations-Platform/services/gateway/rag_router.py): Documented REST API route design, request/response models, and multi-tenant scoping.
+     - [`dependencies.py`](file:///d:/Projects/AI-Operations-Platform/services/gateway/dependencies.py): Documented FastAPI dependency injection Directed Acyclic Graphs (DAG), singleton model caching via `@lru_cache`, and in-memory test overrides.
+   - **`libs/common/`**:
+     - [`config.py`](file:///d:/Projects/AI-Operations-Platform/libs/common/config.py): Documented 12-Factor App configuration via Pydantic `BaseSettings` and zero hardcoded secrets.
+     - [`errors.py`](file:///d:/Projects/AI-Operations-Platform/libs/common/errors.py): Documented platform exception hierarchy and RFC 7807 Problem Details serialization.
+     - [`health.py`](file:///d:/Projects/AI-Operations-Platform/libs/common/health.py): Documented Kubernetes Liveness vs Readiness semantics, probe timeout isolation, and Prometheus RED metrics.
+     - [`logging.py`](file:///d:/Projects/AI-Operations-Platform/libs/common/logging.py): Documented structured JSON logging via `structlog`, task-local `contextvars` propagation, and automatic OpenTelemetry trace/span ID injection.
+     - [`telemetry.py`](file:///d:/Projects/AI-Operations-Platform/libs/common/telemetry.py): Documented OpenTelemetry distributed tracing, W3C Trace Context (`traceparent`) injection/extraction across network boundaries, and `CorrelationIdMiddleware`.
+2. **Quality Gates Verified**:
+   - 71/71 tests passing (100%).
+   - 0 syntax or escape sequence warnings.
+   - 0 Ruff linting issues.
+   - 0 Mypy strict type errors across all 46 source files.
+
+---
+
+### (b) Why we chose this approach
+- **Educational Self-Describing Code**: In an enterprise platform with advanced AI concepts (RRF, cross-encoders, vector normalization, W3C trace propagation, RFC 7807 errors), having the explanation and formulas written directly inside each module turns the codebase into a living textbook for Sahil and the team.
+- **In-Code Documentation over Stale External Docs**: External wikis and Confluence pages diverge from code within weeks. Placing architectural context and mathematical formulas in docstrings ensures that any future developer modifying the function immediately sees the underlying principles and invariants.
+
+---
+
+### (c) Alternatives considered and why rejected
+- **Maintaining documentation solely in external Markdown files**:
+  - *Why rejected*: When reading a Python file in an IDE, jumping back and forth to an external markdown document breaks flow. Having rich docstrings allows instant hover-over inspection in VS Code/PyCharm.
+
+---
+
+### (d) Trade-offs and risks
+- **File line length increases**: Detailed comments increase source code length by ~40%. *Mitigation*: Python's bytecode compiler strips out comments during execution, and docstrings occupy negligible heap memory, resulting in zero runtime performance penalty.
+
+---
+
+### (e) Non-trivial concepts explained simply
+
+#### 1. Small-to-Big Retrieval (Parent-Child Indexing)
+Traditional RAG faces an impossible trade-off:
+- If chunks are small (100 words), semantic vector search is accurate, but the LLM answer is incomplete because context was truncated.
+- If chunks are large (1,000 words), the LLM has plenty of context, but vector search fails because the 1,000-word chunk is an average of too many ideas.
+
+**The Small-to-Big Solution**:
+1. At chunking time: Create a large "Parent Chunk" (2,000 chars), then break it into small "Child Chunks" (500 chars).
+2. Index both in Qdrant, but child chunks store `parent_id = "..."`.
+3. At search time: Query matches the small child chunk with high vector precision.
+4. The retriever looks up `child.parent_id` and swaps the large parent chunk into the LLM prompt!
+Result: High vector retrieval accuracy **and** complete context for the LLM.
+
+#### 2. W3C Trace Context Propagation (`traceparent`)
+When microservices call each other or publish messages to RabbitMQ, how does Grafana stitch their execution times into a single visual waterfall?
+Via the standard W3C `traceparent` header:
+`00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01`
+- `00`: Protocol version.
+- `4bf92f3577b34da6a3ce929d0e0e4736`: Global Trace ID (32 hex digits) shared by all services for this request.
+- `00f067aa0ba902b7`: Parent Span ID (16 hex digits) representing the caller's specific function span.
+- `01`: Trace flags (01 = sampled / recorded).
+Our `inject_trace_context()` and `extract_trace_context()` ensure this string is carried across RabbitMQ headers and MCP tool requests.
+
+---
+
+### (f) How to verify it works
+1. Run full test suite:
+   ```bash
+   .\.venv\Scripts\python.exe -m pytest
+   ```
+   *Expected output*: 71 passed in ~2.2s.
+2. Run strict linting and type-checking:
+   ```bash
+   .\.venv\Scripts\ruff.exe check .
+   .\.venv\Scripts\mypy.exe libs services evals tests
+   ```
+   *Expected output*: All checks passed in 46 source files.

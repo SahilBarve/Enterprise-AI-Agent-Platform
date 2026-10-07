@@ -1,10 +1,34 @@
-"""Standardized application error model and RFC 7807 problem details conversion."""
+"""Standardized application error model and RFC 7807 problem details conversion.
+
+================================================================================
+EDUCATIONAL ARCHITECTURE NOTES:
+Why RFC 7807 Problem Details for HTTP APIs?
+--------------------------------------------------------------------------------
+In modern distributed microservices and multi-agent platforms, error handling
+is often inconsistent: some endpoints return `{ "error": "failed" }`, others return
+`{ "message": "not found" }`, and unhandled bugs return full Python tracebacks!
+
+RFC 7807 ("Problem Details for HTTP APIs") standardizes error responses:
+1. Machine-Readable:
+   Clients can branch on machine-readable error codes (e.g., `GOVERNANCE_BLOCKED` or
+   `RATE_LIMIT_EXCEEDED`) rather than parsing unstructured English messages.
+2. Security & Information Hiding:
+   Internal database table structures or stack traces are never exposed to API callers.
+3. Extensibility:
+   Domain-specific error context (such as required approval tokens or retry durations)
+   can be attached cleanly to the `invalid_params` payload.
+================================================================================
+"""
 
 from typing import Any
 
 
 class AppError(Exception):
-    """Base exception for all domain and platform errors."""
+    """Base exception for all domain and platform errors.
+
+    All custom exceptions in the platform inherit from AppError to ensure uniform
+    translation into HTTP status codes and RFC 7807 JSON payloads.
+    """
 
     def __init__(
         self,
@@ -20,7 +44,14 @@ class AppError(Exception):
         self.details = details or {}
 
     def to_problem_detail(self, instance_path: str | None = None) -> dict[str, Any]:
-        """Convert error to RFC 7807 Problem Details representation."""
+        """Convert error to RFC 7807 Problem Details representation.
+
+        Args:
+            instance_path: Request URI path where the error occurred.
+
+        Returns:
+            Dictionary conforming to RFC 7807 problem details specification.
+        """
         problem: dict[str, Any] = {
             "type": f"urn:aiops:error:{self.error_code.lower().replace('_', '-')}",
             "title": self.error_code,
@@ -36,7 +67,10 @@ class AppError(Exception):
 
 
 class NotFoundError(AppError):
-    """Resource not found."""
+    """Resource not found (HTTP 404).
+
+    Used when a requested collection, document, run, or tool definition does not exist.
+    """
 
     def __init__(
         self,
@@ -59,7 +93,10 @@ class NotFoundError(AppError):
 
 
 class ValidationError(AppError):
-    """Input validation failure."""
+    """Input validation failure (HTTP 422).
+
+    Used when input payloads fail domain validation rules beyond basic schema parsing.
+    """
 
     def __init__(
         self,
@@ -75,7 +112,10 @@ class ValidationError(AppError):
 
 
 class AuthenticationError(AppError):
-    """Missing or invalid authentication credentials."""
+    """Missing or invalid authentication credentials (HTTP 401).
+
+    Used when bearer tokens are missing, expired, or cryptographically invalid.
+    """
 
     def __init__(
         self,
@@ -91,7 +131,10 @@ class AuthenticationError(AppError):
 
 
 class AuthorizationError(AppError):
-    """Actor lacks permissions for the requested resource."""
+    """Actor lacks permissions for the requested resource (HTTP 403).
+
+    Used when an authenticated user attempts to access another tenant's data or lacks RBAC roles.
+    """
 
     def __init__(
         self,
@@ -107,7 +150,11 @@ class AuthorizationError(AppError):
 
 
 class GovernanceError(AppError):
-    """Action rejected by governance gate or requires missing human approval token."""
+    """Action rejected by governance gate or requires human approval token (HTTP 403).
+
+    Core P0 requirement: High-risk write operations (SQL mutations, external webhooks)
+    are strictly halted unless a valid, signed, single-use approval token is present.
+    """
 
     def __init__(
         self,
@@ -127,7 +174,10 @@ class GovernanceError(AppError):
 
 
 class RateLimitError(AppError):
-    """Request rate limit or quota exceeded."""
+    """Request rate limit or quota exceeded (HTTP 429).
+
+    Signals to callers and retry clients that requests should be throttled.
+    """
 
     def __init__(
         self,
@@ -147,7 +197,10 @@ class RateLimitError(AppError):
 
 
 class ConflictError(AppError):
-    """Resource conflict or concurrency violation."""
+    """Resource conflict or concurrency violation (HTTP 409).
+
+    Used when attempting to create a resource with a duplicate unique key or version collision.
+    """
 
     def __init__(
         self,
@@ -163,7 +216,10 @@ class ConflictError(AppError):
 
 
 class ExternalServiceError(AppError):
-    """Downstream service, LLM provider, or MCP server failed."""
+    """Downstream service, LLM provider, or MCP server failed (HTTP 502).
+
+    Distinguishes internal platform bugs (500) from external provider outages (502).
+    """
 
     def __init__(
         self,

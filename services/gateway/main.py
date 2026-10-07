@@ -1,4 +1,42 @@
-"""API Gateway service entrypoint and router configuration."""
+"""API Gateway service entrypoint and router configuration.
+
+================================================================================
+EDUCATIONAL ARCHITECTURE NOTES:
+Why the Application Factory Pattern and RFC 7807 in FastAPI?
+--------------------------------------------------------------------------------
+1. Application Factory (`create_gateway_app`):
+   Rather than instantiating a single global `app = FastAPI()` at module level,
+   wrapping creation inside a function allows tests to inject custom `PlatformSettings`,
+   mock database connections, or disable external exporters without polluting
+   the global Python environment.
+
+2. Middleware Order Matters:
+   - `CorrelationIdMiddleware` is mounted FIRST. It intercepts the HTTP request,
+     extracts or generates `X-Correlation-ID`, and sets it in Python's `contextvars`.
+     Because it runs first, any log message or OpenTelemetry span created by later
+     middleware or route handlers automatically contains the correlation ID!
+   - `CORSMiddleware` handles browser preflight (`OPTIONS`) requests.
+
+3. RFC 7807 Problem Details:
+   Microservices should never return raw unhandled traceback strings to clients.
+   RFC 7807 is the IETF standard for HTTP error responses. The custom exception
+   handlers convert both domain exceptions (`AppError`) and FastAPI schema errors
+   (`RequestValidationError`) into standardized JSON:
+   {
+       "type": "urn:aiops:error:not-found",
+       "title": "RESOURCE_NOT_FOUND",
+       "status": 404,
+       "detail": "Collection runbooks does not exist",
+       "instance": "/api/v1/collections/runbooks/documents"
+   }
+
+4. Cloud-Native Probes:
+   - `/healthz` (Liveness): Tells Kubernetes whether the container process is alive.
+   - `/readyz` (Readiness): Tells Kubernetes whether the service is ready to receive
+     traffic (e.g. Qdrant is connected, Postgres is healthy).
+   - `/metrics` (Prometheus): Exposes RED metrics (Rate, Errors, Duration) for Grafana.
+================================================================================
+"""
 
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
@@ -19,7 +57,14 @@ logger = get_logger("gateway")
 
 
 def create_gateway_app(settings: PlatformSettings | None = None) -> FastAPI:
-    """Application factory for the API Gateway service."""
+    """Application factory for the API Gateway service.
+
+    Args:
+        settings: Optional custom platform settings (useful for test overrides).
+
+    Returns:
+        Configured FastAPI application instance.
+    """
     active_settings = settings or get_settings()
 
     # Configure structured logging and OTel telemetry
@@ -40,6 +85,7 @@ def create_gateway_app(settings: PlatformSettings | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
+        """Modern ASGI lifespan handler managing startup and graceful shutdown."""
         logger.info(
             "API Gateway starting",
             environment=active_settings.ENVIRONMENT,
@@ -55,10 +101,10 @@ def create_gateway_app(settings: PlatformSettings | None = None) -> FastAPI:
         lifespan=lifespan,
     )
 
-    # Middleware: Correlation ID (first to ensure headers/context present everywhere)
+    # Middleware 1: Correlation ID (first in chain so context is available to all components)
     app.add_middleware(CorrelationIdMiddleware)
 
-    # Middleware: CORS
+    # Middleware 2: Cross-Origin Resource Sharing (CORS)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=active_settings.CORS_ORIGINS,
@@ -67,9 +113,10 @@ def create_gateway_app(settings: PlatformSettings | None = None) -> FastAPI:
         allow_headers=["*"],
     )
 
-    # Exception Handler: Domain / AppError -> RFC 7807
+    # Exception Handler: Domain / AppError -> RFC 7807 Problem Details
     @app.exception_handler(AppError)
     async def app_error_handler(request: Request, exc: AppError) -> JSONResponse:
+        """Translate platform domain exceptions to RFC 7807 problem details."""
         logger.warning(
             "Application error caught",
             error_code=exc.error_code,
@@ -82,11 +129,12 @@ def create_gateway_app(settings: PlatformSettings | None = None) -> FastAPI:
             content=exc.to_problem_detail(instance_path=str(request.url.path)),
         )
 
-    # Exception Handler: RequestValidationError -> RFC 7807
+    # Exception Handler: RequestValidationError -> RFC 7807 Problem Details
     @app.exception_handler(RequestValidationError)
     async def validation_error_handler(
         request: Request, exc: RequestValidationError
     ) -> JSONResponse:
+        """Translate Pydantic schema validation errors to RFC 7807 problem details."""
         logger.info(
             "Validation error on request",
             path=str(request.url.path),
@@ -106,19 +154,23 @@ def create_gateway_app(settings: PlatformSettings | None = None) -> FastAPI:
     # Health and Observability Endpoints (FR-GW-8)
     @app.get("/healthz", tags=["System"], summary="Liveness probe")
     async def healthz() -> JSONResponse:
+        """Liveness check: returns 200 if process is up."""
         return await health_registry.liveness()
 
     @app.get("/readyz", tags=["System"], summary="Readiness probe")
     async def readyz() -> JSONResponse:
+        """Readiness check: returns 200 if all dependent subsystems are operational."""
         return await health_registry.readiness()
 
     @app.get("/metrics", tags=["System"], summary="Prometheus metrics")
     async def metrics() -> Response:
+        """Prometheus metrics endpoint in OpenMetrics exposition format."""
         return health_registry.metrics()
 
     # Base info endpoint
     @app.get(active_settings.API_V1_PREFIX + "/status", tags=["Status"])
     async def status() -> dict[str, str]:
+        """Base service info and operational status endpoint."""
         return {
             "app": active_settings.APP_NAME,
             "status": "online",
@@ -132,5 +184,5 @@ def create_gateway_app(settings: PlatformSettings | None = None) -> FastAPI:
     return app
 
 
-# Default ASGI application instance
+# Default ASGI application instance for uvicorn entrypoint
 app = create_gateway_app()

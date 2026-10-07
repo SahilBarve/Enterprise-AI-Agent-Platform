@@ -1,4 +1,13 @@
-"""Provider-agnostic LLM client layer with LiteLLM and deterministic mock provider."""
+"""Provider-agnostic LLM client layer with LiteLLM and deterministic mock provider.
+
+Design Pattern (Dependency Inversion):
+- The RAG Generator and Agent subgraphs depend only on the `LLMProvider` protocol.
+- They NEVER import OpenAI, Anthropic, or Ollama SDKs directly.
+- In production, `LiteLLMProvider` handles model routing, token usage accounting, and
+  automated fallback to local models.
+- In automated testing and local CI, `MockLLMProvider` provides deterministic, grounded
+  answers in 0.001 seconds without consuming API credits or requiring internet access.
+"""
 
 from typing import Any, Protocol
 
@@ -10,23 +19,33 @@ logger = get_logger("llm.provider")
 
 
 class LLMMessage(BaseModel):
-    """Single message in a conversational LLM exchange."""
+    """Single message in a conversational LLM exchange.
+
+    Follows standard chat completion message schema: role ('system', 'user', 'assistant') and content.
+    """
 
     role: str = Field(description="'system', 'user', or 'assistant'")
     content: str = Field(description="Message body text")
 
 
 class LLMResponse(BaseModel):
-    """Normalized response from LLM completion."""
+    """Normalized response from LLM completion.
+
+    Normalizes outputs across all providers (OpenAI, Anthropic, Gemini, Ollama)
+    so downstream callers receive a consistent schema with token usage counts.
+    """
 
     content: str = Field(description="Generated text response")
-    prompt_tokens: int = Field(default=0)
-    completion_tokens: int = Field(default=0)
-    model: str = Field(default="mock-model")
+    prompt_tokens: int = Field(default=0, description="Input tokens consumed")
+    completion_tokens: int = Field(default=0, description="Output tokens generated")
+    model: str = Field(default="mock-model", description="Model name that generated the response")
 
 
 class LLMProvider(Protocol):
-    """Protocol for LLM providers."""
+    """Protocol for LLM providers (structural subtyping / duck typing).
+
+    Any class implementing `complete(messages, ...)` satisfies this protocol.
+    """
 
     def complete(
         self,
@@ -40,9 +59,21 @@ class LLMProvider(Protocol):
 
 
 class MockLLMProvider:
-    """Deterministic LLM provider for unit tests, offline development, and CI regression checks."""
+    """Deterministic LLM provider for unit tests, offline development, and CI regression checks.
+
+    Behaviors:
+    1. If `canned_response` was provided at init, returns that string verbatim.
+    2. If the user prompt contains '[Source 1]', dynamically extracts the text from Source 1
+       and returns a grounded answer citing '[1]'.
+    3. If the prompt contains words like 'unknown' or 'missing', generates a refusal ("I don't know").
+    """
 
     def __init__(self, canned_response: str | None = None) -> None:
+        """Initialize mock provider.
+
+        Args:
+            canned_response: Optional fixed string to return for all completions.
+        """
         self.canned_response = canned_response
 
     def complete(
@@ -99,9 +130,21 @@ class MockLLMProvider:
 
 
 class LiteLLMProvider:
-    """Production provider using LiteLLM abstraction across OpenAI, Anthropic, Bedrock, and Ollama."""
+    """Production provider using LiteLLM abstraction across OpenAI, Anthropic, Bedrock, and Ollama.
+
+    Features:
+    - Provider agnosticism: 'gpt-4o', 'claude-3-5-sonnet', or 'ollama/llama3' use the same call.
+    - Automatic fallback: If the primary cloud provider returns a 5xx or rate limit, automatically
+      retries against `fallback_model` (e.g. local Ollama instance).
+    """
 
     def __init__(self, model_name: str = "gpt-4o-mini", fallback_model: str | None = "ollama/llama3") -> None:
+        """Initialize provider with primary and fallback model names.
+
+        Args:
+            model_name: Primary model name (e.g. 'gpt-4o-mini').
+            fallback_model: Fallback model if primary fails (e.g. 'ollama/llama3').
+        """
         self.model_name = model_name
         self.fallback_model = fallback_model
 

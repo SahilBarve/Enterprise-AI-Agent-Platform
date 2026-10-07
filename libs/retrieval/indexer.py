@@ -1,4 +1,14 @@
-"""Qdrant hybrid vector indexer and collection manager (FR-RAG-3, FR-RAG-10, FR-RAG-11, FR-RAG-13)."""
+"""Qdrant hybrid vector indexer and collection manager (FR-RAG-3, FR-RAG-10, FR-RAG-11, FR-RAG-13).
+
+This module manages the lifecycle of vector collections in Qdrant.
+Instead of storing vectors in separate databases, Qdrant allows dual named vectors
+in a single point:
+  - "dense": 384-dimensional float vector scored via Cosine similarity.
+  - "sparse": Inverted index vector of hashed term IDs and BM25 weights.
+
+It also manages payload indexes (keyword indexes on tenant_id, collection_id, etc.)
+so queries can filter out unauthorized data before vector distance calculations begin.
+"""
 
 from typing import Any
 
@@ -12,6 +22,7 @@ from libs.retrieval.sparse import BM25SparseEncoder
 
 logger = get_logger("retrieval.indexer")
 
+# Standard vector names used across all collections in the platform
 DENSE_VECTOR_NAME = "dense"
 SPARSE_VECTOR_NAME = "sparse"
 
@@ -25,12 +36,30 @@ class QdrantHybridIndexer:
         dense_model: DenseEmbeddingModel | None = None,
         sparse_encoder: BM25SparseEncoder | None = None,
     ) -> None:
+        """Initialize hybrid indexer.
+
+        Args:
+            client: Connected QdrantClient instance (HTTP or in-memory).
+            dense_model: Model used to generate dense vectors (default: 384-dim mock/fastembed).
+            sparse_encoder: BM25 encoder used to generate sparse vectors.
+        """
         self.client = client
         self.dense_model = dense_model or DenseEmbeddingModel(use_mock=True)
         self.sparse_encoder = sparse_encoder or BM25SparseEncoder()
 
     def get_collection_name(self, tenant_id: str, collection_id: str) -> str:
-        """Derive isolated collection name or namespace key."""
+        """Derive isolated collection name or namespace key.
+
+        Qdrant collection names cannot contain hyphens or spaces in certain modes,
+        so we normalize to 'col_{tenant_id}_{collection_id}'.
+
+        Args:
+            tenant_id: Unique organization or tenant identifier.
+            collection_id: Knowledge base or category identifier.
+
+        Returns:
+            Normalized Qdrant collection name string.
+        """
         return f"col_{tenant_id}_{collection_id}".replace("-", "_")
 
     def ensure_collection(
@@ -39,7 +68,27 @@ class QdrantHybridIndexer:
         dense_dim: int = 384,
         distance: rest.Distance = rest.Distance.COSINE,
     ) -> bool:
-        """Create hybrid collection with named dense and sparse vectors if not existing."""
+        """Create hybrid collection with named dense and sparse vectors if not existing.
+
+        Steps:
+        1. Checks if collection already exists in Qdrant.
+        2. If not, creates collection configured with:
+           - vectors_config: named vector 'dense' (size=dense_dim, distance=COSINE).
+           - sparse_vectors_config: named vector 'sparse' (on_disk=False for fast RAM search).
+        3. Creates payload keyword indexes on:
+           - 'tenant_id': mandatory for strict multi-tenant isolation.
+           - 'collection_id': sub-scoping within tenant.
+           - 'document_id': fast cascading deletes and document updates.
+           - 'is_parent': distinguishes parent context chunks from searchable child chunks.
+
+        Args:
+            collection_name: Target collection name.
+            dense_dim: Dense vector dimensionality (default: 384).
+            distance: Distance metric (Cosine, Dot, or Euclid).
+
+        Returns:
+            True if collection was created, False if it already existed.
+        """
         collections = self.client.get_collections().collections
         exists = any(c.name == collection_name for c in collections)
 
@@ -77,7 +126,26 @@ class QdrantHybridIndexer:
         chunks: list[Chunk],
         batch_size: int = 64,
     ) -> int:
-        """Embed and upsert chunks into Qdrant with dual vectors and payload metadata."""
+        """Embed and upsert chunks into Qdrant with dual vectors and payload metadata.
+
+        How it works:
+        1. Ensures the target collection exists.
+        2. Computes dense vectors for all chunk texts in batch.
+        3. Computes sparse BM25 vectors for all chunk texts in batch.
+        4. Packages each chunk into a PointStruct containing:
+           - Point ID: chunk.id (UUID string).
+           - Named vectors: {"dense": [...], "sparse": SparseVector(...)}.
+           - Payload: complete chunk text, document ID, page number, section breadcrumbs, etc.
+        5. Batch upserts points into Qdrant in chunks of `batch_size`.
+
+        Args:
+            collection_name: Target Qdrant collection name.
+            chunks: List of Chunk objects to index.
+            batch_size: Batch size for network upsert requests (default: 64).
+
+        Returns:
+            Number of successfully indexed chunks.
+        """
         if not chunks:
             return 0
 
@@ -140,7 +208,18 @@ class QdrantHybridIndexer:
         tenant_id: str,
         document_id: str,
     ) -> None:
-        """Cascade delete all chunks belonging to a document under tenant scope (FR-RAG-10)."""
+        """Cascade delete all chunks belonging to a document under tenant scope (FR-RAG-10).
+
+        Critical Security Design:
+        The deletion filter MUST require BOTH tenant_id AND document_id.
+        This guarantees that even if a caller passes an arbitrary document_id,
+        it can never delete chunks belonging to another tenant.
+
+        Args:
+            collection_name: Target collection name.
+            tenant_id: Mandatory tenant isolation ID.
+            document_id: Unique document UUID whose chunks should be wiped.
+        """
         self.client.delete(
             collection_name=collection_name,
             points_selector=rest.Filter(

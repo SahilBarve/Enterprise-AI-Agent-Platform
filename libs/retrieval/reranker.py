@@ -1,4 +1,19 @@
-"""Cross-encoder reranker and MMR diversity re-selector (FR-RAG-14, FR-RAG-15)."""
+"""Cross-encoder reranker and MMR diversity re-selector (FR-RAG-14, FR-RAG-15).
+
+Why Reranking is necessary in Production RAG:
+- First-stage retrieval (bi-encoders and BM25) is fast and scans millions of vectors in milliseconds,
+  but it considers query and document independently.
+- Cross-encoders pass both [Query, Document] through full self-attention layers together,
+  allowing every word in the query to attend to every word in the candidate chunk.
+- This captures nuance, negation, word order, and context that bi-encoders miss.
+- By retrieving ~40 candidates and reranking down to the top 5–8, we get both high speed
+  and high precision.
+
+This module also implements Maximal Marginal Relevance (MMR) (FR-RAG-15):
+- Often, adjacent chunks from the same document repeat identical sentences or boilerplate.
+- MMR penalizes candidates that are too similar to already selected chunks, ensuring the top-K
+  presents a diverse set of facts to the LLM.
+"""
 
 import re
 from typing import Any
@@ -10,7 +25,14 @@ logger = get_logger("retrieval.reranker")
 
 
 def compute_token_jaccard(text1: str, text2: str) -> float:
-    """Compute token Jaccard similarity between two texts for MMR redundancy penalty."""
+    """Compute token Jaccard similarity between two texts for MMR redundancy penalty.
+
+    Formula:
+        Jaccard(A, B) = |tokens(A) ∩ tokens(B)| / |tokens(A) ∪ tokens(B)|
+
+    Returns:
+        Float in [0.0, 1.0], where 1.0 means identical word sets and 0.0 means completely disjoint.
+    """
     toks1 = set(re.findall(r"\w+", text1.lower()))
     toks2 = set(re.findall(r"\w+", text2.lower()))
     if not toks1 or not toks2:
@@ -28,11 +50,18 @@ class CrossEncoderReranker:
         model_name: str = "BAAI/bge-reranker-base",
         use_mock: bool = True,
     ) -> None:
+        """Initialize reranker.
+
+        Args:
+            model_name: Cross-encoder HuggingFace model name (e.g. BAAI/bge-reranker-base).
+            use_mock: If True, uses deterministic fallback scorer for instant unit testing.
+        """
         self.model_name = model_name
         self.use_mock = use_mock
         self._model: Any = None
 
     def _get_model(self) -> Any:
+        """Lazily load SentenceTransformers CrossEncoder model if not in mock mode."""
         if self._model is None and not self.use_mock:
             try:
                 from sentence_transformers import CrossEncoder
@@ -47,7 +76,15 @@ class CrossEncoderReranker:
         return self._model
 
     def _score_pair_fallback(self, query: str, content: str) -> float:
-        """Deterministic, high-fidelity relevance scoring of query against candidate content."""
+        """Deterministic, high-fidelity relevance scoring of query against candidate content.
+
+        Evaluates 3 linguistic signals:
+        1. Unigram Coverage: Fraction of query terms present in candidate chunk.
+        2. Bigram Overlap: Consecutive two-word phrases matched in sequence (checks phrase order).
+        3. Exact Substring Match: Bonus if full query phrase appears verbatim in the chunk.
+
+        Combines them into a normalized score bounded in [0.0, 1.0].
+        """
         q_tokens = re.findall(r"\w+", query.lower())
         c_tokens = re.findall(r"\w+", content.lower())
         if not q_tokens or not c_tokens:
@@ -65,7 +102,7 @@ class CrossEncoderReranker:
         c_str = " ".join(c_tokens)
         phrase_bonus = 0.3 if q_str in c_str else 0.0
 
-        # 3. Bigram overlap
+        # 3. Bigram sequence overlap
         q_bigrams = {
             f"{q_tokens[i]}_{q_tokens[i + 1]}" for i in range(len(q_tokens) - 1)
         }
@@ -85,7 +122,15 @@ class CrossEncoderReranker:
         query: str,
         candidates: list[SearchResult],
     ) -> list[float]:
-        """Compute cross-encoder relevance scores for query-candidate pairs."""
+        """Compute cross-encoder relevance scores for query-candidate pairs.
+
+        Args:
+            query: User search text.
+            candidates: List of SearchResult items to score.
+
+        Returns:
+            List of float scores corresponding to each candidate.
+        """
         if not candidates:
             return []
 
@@ -106,7 +151,26 @@ class CrossEncoderReranker:
         min_score: float | None = None,
         diversity_weight: float | None = None,
     ) -> list[SearchResult]:
-        """Rerank candidates with cross-encoder scoring, score cutoff, and optional MMR (FR-RAG-14, FR-RAG-15)."""
+        """Rerank candidates with cross-encoder scoring, score cutoff, and optional MMR (FR-RAG-14, FR-RAG-15).
+
+        Pipeline:
+        1. Scores all candidates against query.
+        2. Filters out candidates below `min_score` threshold.
+        3. Sorts remaining candidates in descending order.
+        4. If diversity_weight is specified, applies Maximal Marginal Relevance (MMR) greedy selection:
+             MMR(d) = λ * Relevance(d) - (1 - λ) * MaxSimilarity(d, already_selected)
+        5. Returns top_k diverse, high-relevance items.
+
+        Args:
+            query: Query text.
+            candidates: Candidate SearchResult objects.
+            top_k: Target number of items to return.
+            min_score: Minimum relevance score threshold (cuts off irrelevant hits).
+            diversity_weight: λ parameter in [0.0, 1.0]. Lower values favor diversity; None disables MMR.
+
+        Returns:
+            Top-K reranked SearchResult objects.
+        """
         if not candidates:
             return []
 
@@ -147,9 +211,11 @@ class CrossEncoderReranker:
 
             for idx, cand in enumerate(remaining):
                 relevance = cand.rerank_score or 0.0
+                # Maximum similarity to any chunk already picked
                 max_sim = max(
                     compute_token_jaccard(cand.content, s.content) for s in selected
                 )
+                # MMR formula: trade off relevance vs redundancy
                 mmr_score = lambda_val * relevance - (1.0 - lambda_val) * max_sim
 
                 if mmr_score > best_mmr:

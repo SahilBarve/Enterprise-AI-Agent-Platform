@@ -1,4 +1,30 @@
-"""REST API endpoints for Document RAG ingestion, search, and question answering (FR-RAG-1, FR-RAG-10, FR-RAG-11, FR-RAG-26)."""
+"""REST API endpoints for Document RAG ingestion, search, and question answering.
+
+================================================================================
+EDUCATIONAL ARCHITECTURE NOTES:
+Why expose RAG via dedicated API Gateway endpoints?
+--------------------------------------------------------------------------------
+In an enterprise multi-agent platform, agents and external frontends should never
+talk directly to vector databases or embedding models. Instead, the API Gateway
+acts as an authenticated, observable, and rate-limited boundary:
+
+1. Tenant Isolation Enforcement:
+   Every incoming endpoint (`POST /collections`, `POST /documents`, `POST /search`,
+   `POST /query`) demands `tenant_id`. The gateway namespaces collection names
+   (e.g. `col_{tenant_id}_{collection_id}`) and attaches payload filters, ensuring
+   zero cross-tenant data access.
+
+2. Unified Ingestion Lifecycle:
+   The `/documents` endpoint chains the entire Phase 1 pipeline:
+   `DocumentParser` (extracts blocks & hashes) -> `DocumentChunker` (splits text) ->
+   `QdrantHybridIndexer` (embeds dense + sparse vectors & stores payload).
+
+3. Two Retrieval Modalities:
+   - `/search`: Semantic search for agents that need raw ranked document chunks.
+   - `/query`: Complete question answering with synthesized LLM response,
+     inline `[N]` citation provenance, and claim groundedness auditing.
+================================================================================
+"""
 
 from typing import Annotated, Any
 
@@ -27,49 +53,75 @@ router = APIRouter(prefix="/api/v1", tags=["RAG & Knowledge"])
 
 
 class CreateCollectionRequest(BaseModel):
+    """Schema for provisioning a new tenant collection."""
+
     tenant_id: str = Field(description="Mandatory tenant ID for collection isolation")
-    collection_id: str = Field(description="Collection name or identifier")
+    collection_id: str = Field(description="Collection name or identifier (e.g. 'runbooks')")
 
 
 class CreateCollectionResponse(BaseModel):
+    """Result of collection creation or verification."""
+
     collection_name: str
     status: str
 
 
 class IngestDocumentRequest(BaseModel):
+    """Schema for uploading a document into the RAG vector index."""
+
     tenant_id: str = Field(description="Mandatory tenant isolation identifier")
     title: str = Field(default="Untitled", description="Document title")
-    content: str = Field(description="Document text or markdown payload")
-    content_type: str = Field(default="text/plain", description="MIME type: text/plain, text/markdown, text/html, text/csv")
-    chunk_strategy: ChunkStrategy = Field(default=ChunkStrategy.RECURSIVE, description="Chunking strategy to apply")
+    content: str = Field(description="Document text, markdown, or HTML payload")
+    content_type: str = Field(
+        default="text/plain",
+        description="MIME type: text/plain, text/markdown, text/html, text/csv, application/pdf",
+    )
+    chunk_strategy: ChunkStrategy = Field(
+        default=ChunkStrategy.RECURSIVE,
+        description="Chunking strategy to apply (recursive, parent_child, heading_aware, table_aware)",
+    )
     chunk_size: int = Field(default=500, description="Target chunk character length")
-    chunk_overlap: int = Field(default=50, description="Chunk overlap size")
-    metadata: dict[str, Any] = Field(default_factory=dict, description="Custom metadata attributes")
+    chunk_overlap: int = Field(default=50, description="Chunk overlap size in characters")
+    metadata: dict[str, Any] = Field(
+        default_factory=dict, description="Custom metadata attributes (tags, department, etc.)"
+    )
 
 
 class IngestDocumentResponse(BaseModel):
+    """Outcome of document parsing, chunking, and indexing."""
+
     document_id: str
     chunks_indexed: int
     content_hash: str
 
 
 class SearchRequest(BaseModel):
+    """Schema for executing hybrid retrieval on an indexed collection."""
+
     query: str = Field(description="Search or question query string")
     tenant_id: str = Field(description="Mandatory tenant isolation identifier")
     collection_id: str = Field(description="Target collection identifier")
     top_k: int = Field(default=5, description="Number of results to return")
-    expand_parent: bool = Field(default=False, description="Expand child chunks to parent context")
-    rerank: bool = Field(default=True, description="Apply cross-encoder reranker")
-    min_score: float | None = Field(default=None, description="Minimum score cutoff")
+    expand_parent: bool = Field(
+        default=False, description="Expand child chunks to parent context (small-to-big)"
+    )
+    rerank: bool = Field(default=True, description="Apply cross-encoder reranking and MMR")
+    min_score: float | None = Field(default=None, description="Minimum score cutoff threshold")
 
 
 class QueryRequest(BaseModel):
+    """Schema for end-to-end question answering with citations."""
+
     query: str = Field(description="User question to answer")
     tenant_id: str = Field(description="Mandatory tenant isolation identifier")
     collection_id: str = Field(description="Target collection identifier")
     top_k: int = Field(default=5, description="Number of chunks retrieved for context")
-    min_relevance: float = Field(default=0.01, description="Minimum relevance score threshold")
-    expand_parent: bool = Field(default=True, description="Expand context using parent documents")
+    min_relevance: float = Field(
+        default=0.01, description="Minimum relevance score threshold for refusal guard"
+    )
+    expand_parent: bool = Field(
+        default=True, description="Expand context using parent documents (small-to-big)"
+    )
 
 
 @router.post(
@@ -82,6 +134,10 @@ def create_collection(
     req: CreateCollectionRequest,
     indexer: Annotated[QdrantHybridIndexer, Depends(get_indexer)],
 ) -> CreateCollectionResponse:
+    """Create a Qdrant collection configured with dual dense and sparse vectors.
+
+    Idempotent: If the collection already exists, returns status='already_exists'.
+    """
     col_name = indexer.get_collection_name(req.tenant_id, req.collection_id)
     created = indexer.ensure_collection(col_name)
     return CreateCollectionResponse(
@@ -101,6 +157,12 @@ def ingest_document(
     req: IngestDocumentRequest,
     indexer: Annotated[QdrantHybridIndexer, Depends(get_indexer)],
 ) -> IngestDocumentResponse:
+    """Ingest a document through the complete parsing and indexing pipeline:
+
+    1. Parse: Structure raw content into layout blocks and compute SHA-256 hash.
+    2. Chunk: Apply selected chunking strategy (e.g. recursive, parent-child).
+    3. Index: Generate dense and BM25 sparse vectors and batch upsert into Qdrant.
+    """
     col_name = indexer.get_collection_name(req.tenant_id, collection_id)
 
     # 1. Parse document
@@ -157,9 +219,10 @@ def ingest_document(
 def delete_document(
     collection_id: str,
     document_id: str,
-    tenant_id: Annotated[str, Query(description="Mandatory tenant ID")],
+    tenant_id: Annotated[str, Query(description="Mandatory tenant ID for isolation")],
     indexer: Annotated[QdrantHybridIndexer, Depends(get_indexer)],
 ) -> dict[str, str]:
+    """Delete all chunks belonging to a document while strictly scoping to tenant_id."""
     col_name = indexer.get_collection_name(tenant_id, collection_id)
     indexer.delete_document(col_name, tenant_id=tenant_id, document_id=document_id)
     return {"status": "deleted", "document_id": document_id}
@@ -175,6 +238,11 @@ def search(
     retriever: Annotated[HybridRetriever, Depends(get_retriever)],
     reranker: Annotated[CrossEncoderReranker, Depends(get_reranker)],
 ) -> list[SearchResult]:
+    """Retrieve ranked chunks matching the query using dense + sparse hybrid fusion.
+
+    When rerank=True, retrieves double candidates (2 * top_k), scores them with
+    the Cross-Encoder, and diversifies results using Maximal Marginal Relevance (MMR).
+    """
     query_obj = RetrievalQuery(
         query=req.query,
         tenant_id=req.tenant_id,
@@ -198,12 +266,19 @@ def search(
 @router.post(
     "/query",
     response_model=GroundedAnswer,
-    summary="Execute end-to-end question answering with inline citations and groundedness check (FR-RAG-26, FR-RAG-27, FR-RAG-28)",
+    summary="Execute end-to-end question answering with inline citations and groundedness check",
 )
 def query(
     req: QueryRequest,
     generator: Annotated[RAGGenerator, Depends(get_rag_generator)],
 ) -> GroundedAnswer:
+    """Execute end-to-end RAG question answering:
+
+    1. Retrieves relevant passages using hybrid search and reranking.
+    2. Refuses to answer if evidence is missing or below `min_relevance`.
+    3. Synthesizes an answer using the LLM with bracketed source citations `[N]`.
+    4. Audits claims for factual grounding against the cited context passages.
+    """
     return generator.generate(
         query=req.query,
         tenant_id=req.tenant_id,

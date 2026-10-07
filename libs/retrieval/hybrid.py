@@ -1,4 +1,14 @@
-"""Hybrid dense + sparse vector retriever with Reciprocal Rank Fusion (FR-RAG-11, FR-RAG-13, FR-RAG-16)."""
+"""Hybrid dense + sparse vector retriever with Reciprocal Rank Fusion (FR-RAG-11, FR-RAG-13, FR-RAG-16).
+
+This module implements the two-modality hybrid retrieval pipeline:
+1. Dense Vector Search: Searches Qdrant using 384-dim semantic embeddings (Cosine distance).
+2. Sparse Lexical Search: Searches Qdrant using BM25 token weights.
+3. Reciprocal Rank Fusion (RRF): Merges both candidate rankings using rank positions:
+      RRF(d) = w_dense / (k + rank_dense) + w_sparse / (k + rank_sparse)
+4. Parent Context Expansion: For small child chunks retrieved, batch-fetches their parent
+   container chunks so downstream LLMs receive broad, coherent context.
+5. Mandatory Pre-Retrieval Filtering: Enforces tenant_id isolation at the vector engine level.
+"""
 
 from typing import Any
 
@@ -21,7 +31,29 @@ def calculate_rrf_score(
     dense_weight: float = 1.0,
     sparse_weight: float = 1.0,
 ) -> float:
-    """Calculate Reciprocal Rank Fusion score from dense and sparse rankings."""
+    """Calculate Reciprocal Rank Fusion score from dense and sparse rankings.
+
+    Formula:
+        Score = (dense_weight / (k + dense_rank)) + (sparse_weight / (k + sparse_rank))
+
+    Why RRF is superior to direct score addition:
+    - Dense scores are cosine similarities in [-1, 1].
+    - Sparse scores are unbounded BM25 scores in [0, 50+].
+    - Normalizing both scales (e.g. min-max) is fragile and sensitive to document length.
+    - RRF relies purely on RANK (1st place, 2nd place, 3rd place), making it robust and scale-invariant.
+    - The smoothing constant `k=60` (established in research by Cormack et al.) prevents the
+      top-ranked item from completely dominating subsequent items.
+
+    Args:
+        dense_rank: 1-indexed rank from dense search (None if not in top dense hits).
+        sparse_rank: 1-indexed rank from sparse search (None if not in top sparse hits).
+        k: Smoothing constant (default: 60).
+        dense_weight: Multiplier weight for dense ranking (default: 1.0).
+        sparse_weight: Multiplier weight for sparse ranking (default: 1.0).
+
+    Returns:
+        Combined RRF score rounded to 6 decimal places.
+    """
     score = 0.0
     if dense_rank is not None and dense_rank > 0:
         score += dense_weight / (k + dense_rank)
@@ -40,6 +72,14 @@ class HybridRetriever:
         sparse_encoder: BM25SparseEncoder | None = None,
         indexer: QdrantHybridIndexer | None = None,
     ) -> None:
+        """Initialize hybrid retriever with vector models and indexer.
+
+        Args:
+            client: Connected QdrantClient.
+            dense_model: Embedding model for dense queries (default: DenseEmbeddingModel).
+            sparse_encoder: BM25 encoder for sparse queries (default: BM25SparseEncoder).
+            indexer: Collection manager and namespace resolver.
+        """
         self.client = client
         self.dense_model = dense_model or DenseEmbeddingModel(use_mock=True)
         self.sparse_encoder = sparse_encoder or BM25SparseEncoder()
@@ -55,7 +95,21 @@ class HybridRetriever:
         collection_id: str | None = None,
         filter_metadata: dict[str, Any] | None = None,
     ) -> rest.Filter:
-        """Construct mandatory tenant isolation filter and optional metadata conditions."""
+        """Construct mandatory tenant isolation filter and optional metadata conditions.
+
+        Security Enforcement:
+        - `tenant_id` MUST be present in every query filter to prevent cross-tenant data leakage.
+        - `is_parent=False` ensures that large parent container chunks are not returned as direct
+          search hits; instead, they are only retrieved via parent context expansion.
+
+        Args:
+            tenant_id: Mandatory tenant ID.
+            collection_id: Collection scope identifier.
+            filter_metadata: Optional dictionary of metadata key/value filters.
+
+        Returns:
+            Qdrant Filter object.
+        """
         must_conditions: list[rest.Condition] = [
             rest.FieldCondition(
                 key="tenant_id",
@@ -102,12 +156,27 @@ class HybridRetriever:
         query: RetrievalQuery,
         collection_name: str | None = None,
     ) -> list[SearchResult]:
-        """Perform dual dense + sparse search and fuse results with Reciprocal Rank Fusion."""
+        """Perform dual dense + sparse search and fuse results with Reciprocal Rank Fusion.
+
+        5-Step Retrieval Pipeline:
+        1. Resolve collection name and verify existence.
+        2. Execute dense query on named vector 'dense' with tenant filter.
+        3. Execute sparse query on named vector 'sparse' with tenant filter.
+        4. Track 1-indexed ranks for both modalities and compute RRF fusion scores.
+        5. Sort candidates descending by RRF score, take top_k, and optionally expand parent context.
+
+        Args:
+            query: RetrievalQuery containing question, top_k, limits, weights, etc.
+            collection_name: Optional explicit collection name override.
+
+        Returns:
+            List of SearchResult objects sorted by fusion score.
+        """
         col_name = collection_name or self.indexer.get_collection_name(
             query.tenant_id, query.collection_id
         )
 
-        # Verify collection exists
+        # 1. Verify collection exists in Qdrant
         collections = [c.name for c in self.client.get_collections().collections]
         if col_name not in collections:
             logger.warning("Target collection does not exist", collection=col_name)
@@ -119,7 +188,7 @@ class HybridRetriever:
             filter_metadata=query.filter_metadata,
         )
 
-        # 1. Dense search
+        # 2. Dense search (Cosine similarity)
         dense_vec = self.dense_model.embed_text(query.query)
         dense_results = self.client.query_points(
             collection_name=col_name,
@@ -130,7 +199,7 @@ class HybridRetriever:
             with_payload=True,
         )
 
-        # 2. Sparse search
+        # 3. Sparse search (BM25 token weights)
         sparse_vec = self.sparse_encoder.encode(query.query)
         sparse_results = self.client.query_points(
             collection_name=col_name,
@@ -144,7 +213,7 @@ class HybridRetriever:
             with_payload=True,
         )
 
-        # 3. Track ranks and payloads
+        # 4. Track ranks and payloads
         dense_ranks: dict[str, int] = {}
         dense_scores: dict[str, float] = {}
         payloads: dict[str, dict[str, Any]] = {}
@@ -165,7 +234,7 @@ class HybridRetriever:
             if point.payload and pid not in payloads:
                 payloads[pid] = dict(point.payload)
 
-        # 4. Fuse scores using Reciprocal Rank Fusion (RRF)
+        # 5. Fuse scores using Reciprocal Rank Fusion (RRF)
         candidate_ids = set(dense_ranks.keys()) | set(sparse_ranks.keys())
         scored_candidates: list[SearchResult] = []
 
@@ -201,7 +270,7 @@ class HybridRetriever:
         scored_candidates.sort(key=lambda x: x.score, reverse=True)
         top_candidates = scored_candidates[: query.top_k]
 
-        # 5. Parent Context Expansion (FR-RAG-16)
+        # 6. Parent Context Expansion (FR-RAG-16)
         if query.expand_parent:
             self._expand_parent_context(col_name, top_candidates)
 
@@ -218,7 +287,20 @@ class HybridRetriever:
         collection_name: str,
         results: list[SearchResult],
     ) -> None:
-        """Batch-retrieve parent chunk contents and populate expanded_content."""
+        """Batch-retrieve parent chunk contents and populate expanded_content (FR-RAG-16).
+
+        Small-to-Big Retrieval Mechanism:
+        - When documents are chunked using parent-child mode, small child chunks are embedded
+          so retrieval has high precision.
+        - However, small chunks may miss surrounding context.
+        - Here, we collect unique parent IDs from the retrieved child chunks, fetch their
+          large parent text from Qdrant in a single batch request, and assign it to
+          `result.expanded_content`.
+
+        Args:
+            collection_name: Qdrant collection name.
+            results: List of top retrieved SearchResult candidates.
+        """
         parent_ids = list({r.parent_id for r in results if r.parent_id})
         if not parent_ids:
             return

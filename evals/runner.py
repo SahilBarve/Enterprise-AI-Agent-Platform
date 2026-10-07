@@ -1,4 +1,19 @@
-"""Benchmark runner evaluating dense vs. sparse vs. hybrid vs. rerank on golden datasets (Phase 1 Exit Criteria)."""
+"""Benchmark runner evaluating dense vs. sparse vs. hybrid vs. rerank on golden datasets (Phase 1 Exit Criteria).
+
+What is an Ablation Study in AI Engineering?
+An ablation study isolates individual components of a system to prove their contribution:
+1. 'dense_only': Bi-encoder semantic embeddings only. Fast, but struggles with exact codes/numbers.
+2. 'sparse_only': BM25 keyword weights only. Perfect for exact terms, but blind to synonyms.
+3. 'hybrid': Merges dense and sparse using Reciprocal Rank Fusion (RRF). Combines both strengths.
+4. 'hybrid_rerank': Applies cross-encoder reranking on top of hybrid candidates. Maximizes MRR.
+
+This runner indexes the golden evaluation dataset into Qdrant and measures:
+- Recall@10
+- Mean Reciprocal Rank (MRR)
+- Hit Rate@10
+- NDCG@10
+- Search Latency (ms)
+"""
 
 import json
 import time
@@ -27,6 +42,12 @@ class EvaluationRunner:
         client: QdrantClient | None = None,
         dataset_path: Path | str | None = None,
     ) -> None:
+        """Initialize evaluation runner with vector store and dataset.
+
+        Args:
+            client: QdrantClient instance (defaults to fast in-memory instance for testing).
+            dataset_path: Path to golden_rag.json dataset file.
+        """
         self.client = client or QdrantClient(location=":memory:")
         self.dense_model = DenseEmbeddingModel(dimension=64, use_mock=True)
         self.sparse_encoder = BM25SparseEncoder()
@@ -43,7 +64,7 @@ class EvaluationRunner:
         )
         self.reranker = CrossEncoderReranker(use_mock=True)
 
-        # Load dataset
+        # Load golden dataset from disk
         path = (
             Path(dataset_path)
             if dataset_path
@@ -53,7 +74,17 @@ class EvaluationRunner:
             self.dataset: dict[str, Any] = json.load(f)
 
     def setup_index(self, collection_name: str = "golden_eval_col") -> int:
-        """Index the golden dataset chunks into Qdrant."""
+        """Index the golden dataset chunks into Qdrant.
+
+        Converts raw dictionary documents into typed Chunk models and upserts them
+        into Qdrant with dual vectors.
+
+        Args:
+            collection_name: Target Qdrant collection name.
+
+        Returns:
+            Number of indexed chunks.
+        """
         raw_docs = self.dataset.get("documents", [])
         chunks: list[Chunk] = []
 
@@ -79,7 +110,22 @@ class EvaluationRunner:
         collection_name: str = "golden_eval_col",
         top_k: int = 10,
     ) -> dict[str, float]:
-        """Evaluate a specific retrieval configuration across all queries."""
+        """Evaluate a specific retrieval configuration across all queries in the golden dataset.
+
+        Ablation Modes:
+        - 'dense_only': dense_weight=1.0, sparse_weight=0.0
+        - 'sparse_only': dense_weight=0.0, sparse_weight=1.0
+        - 'hybrid': dense_weight=1.0, sparse_weight=1.0 (RRF fusion)
+        - 'hybrid_rerank': hybrid retrieval followed by Cross-Encoder reranker
+
+        Args:
+            mode: One of 'dense_only', 'sparse_only', 'hybrid', 'hybrid_rerank'.
+            collection_name: Qdrant collection name.
+            top_k: Number of retrieved results evaluated per query.
+
+        Returns:
+            Dict containing mean recall_at_k, mrr, hit_rate, ndcg_at_k, and avg_latency_ms.
+        """
         queries = self.dataset.get("queries", [])
         recalls: list[float] = []
         mrrs: list[float] = []
@@ -93,7 +139,7 @@ class EvaluationRunner:
 
             t0 = time.perf_counter()
 
-            # Configure weights based on mode
+            # Configure weights and search based on ablation mode
             if mode == "dense_only":
                 r_query = RetrievalQuery(
                     query=query_text,
@@ -125,6 +171,7 @@ class EvaluationRunner:
                 )
                 results = self.retriever.search(r_query, collection_name=collection_name)
             elif mode == "hybrid_rerank":
+                # Retrieve top_k * 2 candidates for reranker pool
                 r_query = RetrievalQuery(
                     query=query_text,
                     tenant_id="tenant-ops",
@@ -151,6 +198,7 @@ class EvaluationRunner:
             ndcgs.append(ndcg_at_k(retrieved_ids, relevant_ids, k=top_k))
             latencies.append(latency_ms)
 
+        # Aggregate across all test queries
         return {
             "recall_at_k": round(sum(recalls) / len(recalls), 4) if recalls else 0.0,
             "mrr": round(sum(mrrs) / len(mrrs), 4) if mrrs else 0.0,
@@ -162,7 +210,16 @@ class EvaluationRunner:
     def run_full_benchmark(
         self, collection_name: str = "golden_eval_col"
     ) -> dict[str, dict[str, float]]:
-        """Run complete ablation benchmark across all retrieval modes."""
+        """Run complete ablation benchmark across all retrieval modes.
+
+        Executes all 4 modes on the indexed golden dataset and logs comparative results.
+
+        Args:
+            collection_name: Qdrant collection name to use for benchmark.
+
+        Returns:
+            Dictionary mapping each mode name to its performance metrics dict.
+        """
         self.setup_index(collection_name)
         modes = ["dense_only", "sparse_only", "hybrid", "hybrid_rerank"]
         report: dict[str, dict[str, float]] = {}

@@ -1,4 +1,40 @@
-"""Multi-strategy document chunking engine (FR-RAG-5, FR-RAG-7, FR-RAG-16)."""
+"""Multi-strategy document chunking engine (FR-RAG-5, FR-RAG-7, FR-RAG-16).
+
+================================================================================
+EDUCATIONAL ARCHITECTURE NOTES:
+Why is chunking strategy the single most impactful lever in RAG accuracy?
+--------------------------------------------------------------------------------
+Vector databases perform similarity search using dense embeddings. A dense embedding
+is a fixed-size vector (e.g. 384 or 1536 floating point numbers) that represents
+the semantic meaning of a passage.
+
+The Fundamental Chunk Size Dilemma:
+1. Too Large (e.g. 4,000 characters):
+   The vector becomes a diluted average of many disparate thoughts. If a chunk covers
+   both database backup procedures and billing disputes, the embedding will only be
+   vaguely close to both queries, causing retrieval to fail (low recall/precision).
+2. Too Small (e.g. 100 characters):
+   The embedding is very sharp, but the retrieved text lacks the context needed for
+   the LLM to formulate a coherent answer.
+
+How this engine solves the dilemma with 4 specialized strategies:
+- Recursive Splitting:
+  Tries splitting on paragraphs (`\n\n`), then lines (`\n`), then sentences (`. `),
+  and finally words (` `), maintaining a sliding-window overlap so facts straddling
+  boundaries are never severed.
+- Parent-Child (Small-to-Big Retrieval, FR-RAG-5 & FR-RAG-16):
+  Creates small child chunks (500 chars) for indexing and vector search, linked to
+  large parent container chunks (2,000 chars). At query time, the small chunk matches
+  the search query with high precision, and the retriever swaps in the large parent
+  chunk for the LLM to read!
+- Table-Aware Splitting:
+  When a tabular block exceeds the chunk size, this chunker slices rows while
+  REPEATING the column headers in each slice. This ensures that every slice remains
+  a valid, interpretable table.
+- Heading-Aware Splitting:
+  Groups parsed blocks strictly under common section breadcrumbs (e.g. "Security > IAM").
+================================================================================
+"""
 
 import hashlib
 import uuid
@@ -16,6 +52,14 @@ class DocumentChunker:
         chunk_overlap: int = 50,
         parent_chunk_size: int = 2000,
     ) -> None:
+        """Initialize chunker with strategy parameters.
+
+        Args:
+            strategy: Chunking strategy to apply (RECURSIVE, PARENT_CHILD, HEADING_AWARE, TABLE_AWARE).
+            chunk_size: Target character length for regular or child chunks.
+            chunk_overlap: Sliding window character overlap to preserve boundary context.
+            parent_chunk_size: Character length for parent container chunks in PARENT_CHILD mode.
+        """
         self.strategy = strategy
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
@@ -23,16 +67,31 @@ class DocumentChunker:
 
     @staticmethod
     def compute_chunk_hash(text: str) -> str:
-        """Compute SHA-256 hash for chunk deduplication (FR-RAG-7)."""
+        """Compute SHA-256 hash for chunk deduplication (FR-RAG-7).
+
+        Used to detect identical text chunks across re-ingested documents and avoid
+        redundant vector upserts.
+        """
         return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
     @staticmethod
     def estimate_tokens(text: str) -> int:
-        """Heuristic token count estimation (~4 characters per token)."""
+        """Heuristic token count estimation (~4 characters per token for English).
+
+        In production, a fast BPE tokenizer (like tiktoken) or this ~4-char heuristic
+        allows quick budget estimation before making LLM calls.
+        """
         return max(1, len(text) // 4)
 
     def chunk_document(self, doc: ParsedDocument) -> list[Chunk]:
-        """Dispatch document chunking based on configured strategy."""
+        """Dispatch document chunking based on configured strategy.
+
+        Args:
+            doc: Parsed document with structured blocks and metadata.
+
+        Returns:
+            List of indexable Chunk objects with provenance and parent-child links.
+        """
         match self.strategy:
             case ChunkStrategy.PARENT_CHILD:
                 return self._chunk_parent_child(doc)
@@ -44,7 +103,15 @@ class DocumentChunker:
                 return self._chunk_recursive(doc)
 
     def _split_text_recursively(self, text: str, max_size: int, overlap: int) -> list[str]:
-        """Split text using recursive separators: paragraph, newline, sentence, word."""
+        """Split text using recursive separators: paragraph, newline, sentence, word.
+
+        Algorithm:
+        1. Try splitting text by the most natural boundary (paragraphs `\n\n`).
+        2. If a paragraph is still longer than `max_size`, recurse using lines `\n`.
+        3. If still too long, recurse using sentence stops `. `.
+        4. If still too long, split by words ` `.
+        5. Slide a window of size `overlap` across chunks to prevent lost meaning at boundaries.
+        """
         if len(text) <= max_size:
             return [text.strip()] if text.strip() else []
 
@@ -54,6 +121,7 @@ class DocumentChunker:
     def _recursive_split(
         self, text: str, separators: list[str], max_size: int, overlap: int
     ) -> list[str]:
+        """Internal recursive helper for text splitting with sliding window overlap."""
         if not separators or len(text) <= max_size:
             return [text.strip()] if text.strip() else []
 
@@ -85,7 +153,8 @@ class DocumentChunker:
                 if current:
                     chunks.append(sep.join(current).strip())
 
-                # Sliding window overlap
+                # Sliding window overlap calculation:
+                # Carry over the tail elements from `current` until their length >= overlap
                 if overlap > 0 and current:
                     overlap_buffer: list[str] = []
                     acc = 0
@@ -137,7 +206,12 @@ class DocumentChunker:
         return chunks
 
     def _chunk_heading_aware(self, doc: ParsedDocument) -> list[Chunk]:
-        """Chunking grouped strictly by section headings."""
+        """Chunking grouped strictly by section headings.
+
+        Why Heading-Aware Chunking?
+        In technical documentation, procedures under "Linux Setup" must never be merged
+        with steps under "Windows Setup". Grouping blocks by section path preserves topic integrity.
+        """
         chunks: list[Chunk] = []
         chunk_idx = 0
 
@@ -174,7 +248,17 @@ class DocumentChunker:
         return chunks
 
     def _chunk_table_aware(self, doc: ParsedDocument) -> list[Chunk]:
-        """Table-aware chunking preserving header rows across split table slices."""
+        """Table-aware chunking preserving header rows across split table slices.
+
+        How Table Header Preservation Works:
+        Suppose a table has 50 rows. Splitting naively into 2 chunks would give:
+        - Chunk 1: Header + rows 1-25. (Understood by LLM)
+        - Chunk 2: Rows 26-50 without headers. (Mangled! The LLM doesn't know what column 3 is)
+        With table-aware chunking:
+        - Chunk 1: Header + rows 1-25.
+        - Chunk 2: Header + rows 26-50.
+        Both chunks retain complete self-describing tabular meaning!
+        """
         chunks: list[Chunk] = []
         chunk_idx = 0
 
@@ -268,8 +352,15 @@ class DocumentChunker:
         """Parent-child small-to-big chunking (FR-RAG-5, FR-RAG-16).
 
         Produces:
-        1. Large Parent chunks (parent_chunk_size) stored with is_parent=True.
-        2. Small Child chunks (chunk_size) pointing to parent_id for retrieval expansion.
+        1. Large Parent chunks (parent_chunk_size, e.g. 2000 chars) stored with is_parent=True.
+        2. Small Child chunks (chunk_size, e.g. 500 chars) pointing to parent_id.
+
+        Why this works so well in practice:
+        - Search hits on the child chunk because the child chunk is short, concise,
+          and highly focused on the specific keyword or concept.
+        - The HybridRetriever resolves child.parent_id -> parent_chunk.content.
+        - The LLM receives the full paragraph or section around the match, avoiding
+          any out-of-context misinterpretations!
         """
         all_chunks: list[Chunk] = []
         chunk_idx = 0
@@ -299,7 +390,7 @@ class DocumentChunker:
             all_chunks.append(parent_chunk)
             chunk_idx += 1
 
-            # Step 2: Split parent chunk into smaller child chunks
+            # Step 2: Split each parent chunk into smaller child chunks
             child_texts = self._split_text_recursively(p_text, self.chunk_size, self.chunk_overlap)
             for c_text in child_texts:
                 child_chunk = Chunk(
