@@ -53,15 +53,16 @@ ai-ops-platform/
 - [ ] **Phase 11: Stretch** (Playbooks, Slack bot, chaos tests)
 
 ## Current Status
-- **Phase**: Phase 2 — Optimization (Slice 2.2 Complete)
+- **Phase**: Phase 2 — Optimization (Slice 2.3 Complete)
 - **Done**:
   - Phase 1 Core RAG complete and baseline verified (Recall@10=1.0, MRR=1.0, Latency=1.28ms).
   - Codebase-wide educational documentation and mathematical formulas across all 21 modules.
   - Slice 2.1: Two-tier semantic cache ([`libs/retrieval/cache.py`](file:///d:/Projects/AI-Operations-Platform/libs/retrieval/cache.py)) with Tier 1 exact SHA-256 match, Tier 2 semantic embedding similarity ($\ge 0.92$), strict multi-tenant key isolation, cache poisoning protection (refusal & low confidence), TTL expiration, collection invalidation, and Prometheus hit/miss counters.
   - Slice 2.2: Context compressor & token budgeter ([`libs/retrieval/compressor.py`](file:///d:/Projects/AI-Operations-Platform/libs/retrieval/compressor.py)) with sentence-level relevance filtering, U-shaped "lost in the middle" attention reordering, token budget enforcement, and compression ratio reporting.
-  - 87 unit & integration tests passing with 91% total coverage; strict Mypy (50 files) and Ruff 100% green.
-- **In Progress**: Slice 2.3: Adaptive Corrective RAG (CRAG) router ([`libs/retrieval/crag.py`](file:///d:/Projects/AI-Operations-Platform/libs/retrieval/crag.py)).
-- **Next**: Slice 2.4: Integration into RAG Generator & Gateway API; Phase 2 Exit Criteria verification.
+  - Slice 2.3: Adaptive Corrective RAG (CRAG) router ([`libs/retrieval/crag.py`](file:///d:/Projects/AI-Operations-Platform/libs/retrieval/crag.py)) with tri-state confidence grading (CORRECT $\ge 0.65$, AMBIGUOUS $\ge 0.30$, INCORRECT $< 0.30$), query rewriting/expansion, sub-query decomposition, and external fallback routing.
+  - 93 unit & integration tests passing with 91% total coverage; strict Mypy (52 files) and Ruff 100% green.
+- **In Progress**: Slice 2.4: Integration into RAG Generator & Gateway API; Phase 2 Exit Criteria verification.
+- **Next**: Phase 3: Orchestration & Governance (LangGraph supervisor, Postgres checkpointer, approval tokens, HITL).
 
 ## Known Gaps
 - None.
