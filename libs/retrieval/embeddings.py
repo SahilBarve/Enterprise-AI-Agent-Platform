@@ -13,6 +13,7 @@ This module supports:
 
 import hashlib
 import math
+import re
 from typing import Any
 
 
@@ -58,31 +59,30 @@ class DenseEmbeddingModel:
         return self._model
 
     def _mock_embed(self, text: str) -> list[float]:
-        """Generate deterministic pseudo-random unit vector from text hash.
+        """Generate deterministic pseudo-random unit vector using token pooling.
 
         How it works:
-        1. Hashes the text + index using SHA-256 to create deterministic floats in [-1.0, 1.0].
-        2. Calculates the Euclidean length (L2 norm) of the vector: sqrt(sum(v_i^2)).
-        3. Divides each coordinate by the norm so the vector has length 1.0 (unit vector).
-        This guarantees that identical strings always produce identical vectors, and
-        cosine similarity between vectors behaves predictably during testing.
-
-        Args:
-            text: Text string to embed.
-
-        Returns:
-            L2-normalized float vector of length `self.dimension`.
+        1. Tokenizes text into lowercase alphanumeric words.
+        2. Hashes each word + dimension index to generate word vectors.
+        3. Averages the word vectors (mean pooling, mimicking bag-of-words / FastText).
+        4. L2-normalizes so that unit vectors allow cosine distance = 1 - dot_product.
+        This guarantees that queries sharing significant vocabulary produce high
+        cosine similarity, while unrelated queries remain orthogonal, enabling realistic
+        semantic testing without downloading deep neural transformer models.
         """
-        vec: list[float] = []
-        for i in range(self.dimension):
-            h = hashlib.sha256(f"{text}_{i}".encode()).hexdigest()
-            # Map 8 hex characters to float in range [-1.0, 1.0]
-            val = (int(h[:8], 16) / 0xFFFFFFFF) * 2.0 - 1.0
-            vec.append(val)
+        words = re.findall(r"\w+", text.lower())
+        if not words:
+            words = [text.strip().lower() or "empty"]
 
-        # L2-normalize so that cosine distance is mathematically valid
-        norm = math.sqrt(sum(v * v for v in vec)) or 1.0
-        return [round(v / norm, 6) for v in vec]
+        accum = [0.0] * self.dimension
+        for word in words:
+            for i in range(self.dimension):
+                h = hashlib.sha256(f"{word}_{i}".encode()).hexdigest()
+                val = (int(h[:8], 16) / 0xFFFFFFFF) * 2.0 - 1.0
+                accum[i] += val
+
+        norm = math.sqrt(sum(v * v for v in accum)) or 1.0
+        return [round(v / norm, 6) for v in accum]
 
     def embed_text(self, text: str) -> list[float]:
         """Generate a dense vector for a single text string.

@@ -53,17 +53,14 @@ ai-ops-platform/
 - [ ] **Phase 11: Stretch** (Playbooks, Slack bot, chaos tests)
 
 ## Current Status
-- **Phase**: Phase 1 — Core RAG [COMPLETE — AWAITING GO-AHEAD FOR PHASE 2]
-- **Done**: Phase 1 complete across Slices 1.1–1.6:
-  - Layout-aware parser ([`libs/retrieval/parser.py`](file:///d:/Projects/AI-Operations-Platform/libs/retrieval/parser.py)) & multi-strategy chunker ([`libs/retrieval/chunker.py`](file:///d:/Projects/AI-Operations-Platform/libs/retrieval/chunker.py)).
-  - BM25 sparse vectors ([`libs/retrieval/sparse.py`](file:///d:/Projects/AI-Operations-Platform/libs/retrieval/sparse.py)), dense embeddings ([`libs/retrieval/embeddings.py`](file:///d:/Projects/AI-Operations-Platform/libs/retrieval/embeddings.py)), and Qdrant hybrid indexer ([`libs/retrieval/indexer.py`](file:///d:/Projects/AI-Operations-Platform/libs/retrieval/indexer.py)).
-  - Hybrid retrieval with RRF fusion and parent context expansion ([`libs/retrieval/hybrid.py`](file:///d:/Projects/AI-Operations-Platform/libs/retrieval/hybrid.py)) and Cross-Encoder reranker with MMR ([`libs/retrieval/reranker.py`](file:///d:/Projects/AI-Operations-Platform/libs/retrieval/reranker.py)).
-  - Citation engine ([`libs/retrieval/citations.py`](file:///d:/Projects/AI-Operations-Platform/libs/retrieval/citations.py)) and grounded generator ([`libs/retrieval/generator.py`](file:///d:/Projects/AI-Operations-Platform/libs/retrieval/generator.py)).
-  - Evaluation harness ([`evals/metrics.py`](file:///d:/Projects/AI-Operations-Platform/evals/metrics.py), [`evals/runner.py`](file:///d:/Projects/AI-Operations-Platform/evals/runner.py)) with Exit Criteria baseline measured (Recall@10=1.0, MRR=1.0, Latency=1.28ms).
-  - Gateway REST API ([`services/gateway/rag_router.py`](file:///d:/Projects/AI-Operations-Platform/services/gateway/rag_router.py)) for collections, document ingestion, cascading deletion, hybrid search, and query answering.
-  - 71 unit and integration tests passing with 90% total test coverage; strict Mypy (46 files) and Ruff checks 100% green.
-- **In Progress**: Stopped at Phase 1 milestone completion.
-- **Next**: Phase 2 (Optimization: Two-tier semantic cache in Redis, sentence-level context compressor, token budgeter, and adaptive CRAG router).
+- **Phase**: Phase 2 — Optimization (Slice 2.1 Complete)
+- **Done**:
+  - Phase 1 Core RAG complete and baseline verified (Recall@10=1.0, MRR=1.0, Latency=1.28ms).
+  - Codebase-wide educational documentation and mathematical formulas across all 21 modules.
+  - Slice 2.1: Two-tier semantic cache ([`libs/retrieval/cache.py`](file:///d:/Projects/AI-Operations-Platform/libs/retrieval/cache.py)) with Tier 1 exact SHA-256 match, Tier 2 semantic embedding similarity ($\ge 0.92$), strict multi-tenant key isolation, cache poisoning protection (refusal & low confidence), TTL expiration, collection invalidation, and Prometheus hit/miss counters.
+  - 80 unit & integration tests passing with 91% total coverage; strict Mypy (48 files) and Ruff 100% green.
+- **In Progress**: Slice 2.2: Context Compression & Token Budgeter ([`libs/retrieval/compressor.py`](file:///d:/Projects/AI-Operations-Platform/libs/retrieval/compressor.py)).
+- **Next**: Slice 2.3: Adaptive CRAG router; Slice 2.4: Integration into RAG Generator & Gateway API.
 
 ## Known Gaps
 - None.
