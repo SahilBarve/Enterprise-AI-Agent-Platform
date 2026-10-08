@@ -1807,3 +1807,121 @@ Even if an attacker intercepts an approval token for `send_webhook {"amount": 50
    .\.venv\Scripts\mypy.exe libs services evals tests
    ```
    *Expected output*: Zero issues found across 67 source files.
+
+
+---
+
+## [2026-10-08] Phase 4 (Slice 4.1) — MCP Client Protocol & Core Tool Transport Plane
+
+### (a) What was done
+1. **Model Context Protocol (MCP) Specification Models ([`libs/mcp_client/models.py`](file:///d:/Projects/AI-Operations-Platform/libs/mcp_client/models.py))**:
+   - Implemented strict JSON-RPC 2.0 envelopes: `JSONRPCRequest`, `JSONRPCResponse`, `JSONRPCError`, and standard protocol error codes (`PARSE_ERROR`, `INVALID_PARAMS`, `METHOD_NOT_FOUND`, `INTERNAL_ERROR`, `UNAUTHORIZED`) (FR-MCP-1).
+   - Implemented tool schema declarations: `MCPToolInputSchema`, `MCPToolDefinition`, `MCPListToolsResult`.
+   - Implemented tool execution outputs: `MCPTextContent`, `MCPImageContent`, and `MCPToolCallResult` with metadata tracking (FR-MCP-2, FR-MCP-7).
+2. **Pluggable Transports ([`libs/mcp_client/transport.py`](file:///d:/Projects/AI-Operations-Platform/libs/mcp_client/transport.py))**:
+   - `MCPTransport` abstract base protocol defining synchronous and asynchronous request/response dispatch (`send_request`, `asend_request`, `close`).
+   - `InMemoryMCPTransport`: In-process message dispatching with a full JSON serialization/deserialization cycle, enabling unit testing of remote MCP protocol behavior in sub-millisecond execution times without operating system subprocess overhead.
+   - `StdioMCPTransport`: Standard I/O subprocess transport communicating via newline-delimited JSON-RPC over stdin/stdout with process monitoring and error stream handling.
+3. **MCPClient with Governance Gate Binding ([`libs/mcp_client/client.py`](file:///d:/Projects/AI-Operations-Platform/libs/mcp_client/client.py))**:
+   - Dynamic tool discovery (`tools/list`) with in-memory metadata caching.
+   - Strict argument validation against tool `inputSchema` before dispatching calls.
+   - **P0 Pillar Governance Integration**: Built-in `GovernanceGate` enforcement. If a Tier 2 write tool (e.g. `run_sql_write`) is called without a valid cryptographic approval token, the client intercepts and raises `GovernanceError` before the call is sent.
+   - W3C Distributed trace context injection (`inject_trace_context`) attaching correlation IDs to every remote RPC call under `_meta`.
+4. **Aggregated Multi-Server Tool Registry ([`libs/mcp_client/registry.py`](file:///d:/Projects/AI-Operations-Platform/libs/mcp_client/registry.py))**:
+   - `MCPToolRegistry`: Unifies tools from independent MCP servers into an aggregated catalog, manages tool name collision detection (`ConflictError`), and routes invocations to the proper server client.
+5. **Unit Tests & Verification ([`tests/unit/test_mcp_client.py`](file:///d:/Projects/AI-Operations-Platform/tests/unit/test_mcp_client.py))**:
+   - 8 unit tests validating serialization, discovery caching, schema validation, tool not found errors, governance gate enforcement with signed tokens, and multi-server routing.
+   - Total test suite expanded to **136 passing tests** (100% green).
+   - Strict Mypy and Ruff linting pass with 0 issues.
+
+---
+
+### (b) Why we chose this approach
+- **P0 Non-Negotiable Pillar: MCP-First Architecture**:
+  In an enterprise operations platform, agents must never directly import database drivers, scraper libraries, or code sandboxes. Coupling tool implementations into the agent runtime bloats Docker containers, exposes shared memory secrets, and makes independent scaling impossible. Standardizing on MCP allows tools to be deployed in independent, restricted microservice containers.
+- **Client-Side Pre-Flight Governance Gate**:
+  Validating risk tiers and signed approval tokens at the client boundary prevents unnecessary RPC calls from traversing the network if an action is unauthorized or missing human sign-off.
+
+---
+
+### (c) Alternatives considered and why rejected
+- **Direct Python imports for tools (`from libs.tools import run_sql`)**:
+  - *Why rejected*: Violates the non-negotiable P0 architecture. Directly importing tools couples all libraries into the supervisor process, destroys tenant security boundaries, and prevents independent container deployment.
+- **Custom proprietary REST endpoints for each tool**:
+  - *Why rejected*: Writing ad-hoc REST schemas for 20+ tools creates maintenance nightmare. MCP provides an open, industry-standard specification (JSON-RPC 2.0 with JSON Schema) recognized by modern AI tooling.
+
+---
+
+### (d) Non-trivial concepts explained simply
+
+#### 1. The MCP Tool Plane Architecture
+```
+  LangGraph Supervisor & Specialist Agents
+               │
+               ▼
+        [MCPToolRegistry]
+        ├── 'search_web'     ──> Web Search MCP Server (Stdio/SSE)
+        ├── 'run_sql_write'  ──> SQL Analytics MCP Server (Stdio/SSE)
+        ├── 'execute_code'   ──> Sandbox MCP Server (Docker/gVisor)
+        └── 'publish_report' ──> Report Generation MCP Server (Stdio/SSE)
+```
+
+#### 2. Model Context Protocol Wire Message Format
+A client queries tools using `tools/list`:
+```json
+--> { "jsonrpc": "2.0", "id": "req-1", "method": "tools/list", "params": {} }
+<-- {
+      "jsonrpc": "2.0",
+      "id": "req-1",
+      "result": {
+        "tools": [
+          {
+            "name": "search_web",
+            "description": "Search the live web",
+            "inputSchema": { "type": "object", "properties": { "query": { "type": "string" } }, "required": ["query"] }
+          }
+        ]
+      }
+    }
+```
+A client executes a tool using `tools/call`:
+```json
+--> {
+      "jsonrpc": "2.0",
+      "id": "call-2",
+      "method": "tools/call",
+      "params": {
+        "name": "search_web",
+        "arguments": { "query": "Latest AWS outage" },
+        "_meta": { "X-Correlation-ID": "abc-123", "tenant_id": "tenant-ops" }
+      }
+    }
+<-- {
+      "jsonrpc": "2.0",
+      "id": "call-2",
+      "result": {
+        "content": [{ "type": "text", "text": "Found 3 results..." }],
+        "isError": false
+      }
+    }
+```
+
+---
+
+### (e) How to verify it works
+1. Run MCP client unit tests:
+   ```bash
+   .\.venv\Scripts\pytest.exe tests/unit/test_mcp_client.py -v
+   ```
+   *Expected output*: 8 passed in <1s.
+2. Run full test suite:
+   ```bash
+   .\.venv\Scripts\pytest.exe -q
+   ```
+   *Expected output*: 136 passed.
+3. Run strict type checking and linting:
+   ```bash
+   .\.venv\Scripts\ruff.exe check libs/mcp_client tests/unit/test_mcp_client.py
+   .\.venv\Scripts\mypy.exe libs/mcp_client tests/unit/test_mcp_client.py
+   ```
+   *Expected output*: All checks passed.

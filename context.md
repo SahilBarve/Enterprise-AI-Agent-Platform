@@ -53,16 +53,13 @@ ai-ops-platform/
 - [ ] **Phase 11: Stretch** (Playbooks, Slack bot, chaos tests)
 
 ## Current Status
-- **Phase**: Phase 3 Complete! Ready for Phase 4 (Specialist Agents & MCP Tool Plane).
+- **Phase**: Phase 4 — Specialist Agents & MCP Tool Plane (Slice 4.1 Complete)
 - **Done**:
-  - Phase 1 & Phase 2 complete, benchmarked, documented, and pushed to GitHub.
-  - Slice 3.1: State schema & persistent checkpointers ([`libs/agents/state.py`](file:///d:/Projects/AI-Operations-Platform/libs/agents/state.py), [`libs/agents/checkpointer.py`](file:///d:/Projects/AI-Operations-Platform/libs/agents/checkpointer.py)) with typed lifecycle states, LangGraph reducers, budget guards, crash recovery, and time-travel forking (FR-OR-2, FR-OR-5, FR-OR-7, FR-OR-9, FR-OR-10).
-  - Slice 3.2: Risk-Tiered Policy Engine & Cryptographic Approval Tokens ([`libs/guardrails/tokens.py`](file:///d:/Projects/AI-Operations-Platform/libs/guardrails/tokens.py), [`libs/guardrails/governance.py`](file:///d:/Projects/AI-Operations-Platform/libs/guardrails/governance.py)) with HMAC-SHA256 argument binding, anti-tampering verification, single-use replay prevention, and 4-tier risk policy gate (FR-OR-6, FR-SEC-3 to FR-SEC-6).
-  - Slice 3.3: Planner, Critic & Multi-Agent LangGraph Supervisor with Persisted Interrupts ([`libs/agents/supervisor.py`](file:///d:/Projects/AI-Operations-Platform/libs/agents/supervisor.py)) with intent decomposition, supervisor router, worker dispatch, budget limits, persisted `interrupt()` pauses on Tier 2 actions, and `Command(resume=token)` resumption (FR-OR-1, FR-OR-3, FR-OR-4, FR-OR-6, FR-OR-7).
-  - Slice 3.4: Orchestrator Gateway API & Crash Recovery Exit Criteria ([`services/gateway/orchestrator_router.py`](file:///d:/Projects/AI-Operations-Platform/services/gateway/orchestrator_router.py), [`tests/unit/test_gateway_runs.py`](file:///d:/Projects/AI-Operations-Platform/tests/unit/test_gateway_runs.py), [`tests/unit/test_crash_recovery.py`](file:///d:/Projects/AI-Operations-Platform/tests/unit/test_crash_recovery.py)). Verified Phase 3 exit criteria: multi-step run resumes after crash with zero lost state.
-  - 128 unit & integration tests passing with 92% coverage; strict Mypy (67 files) and Ruff 100% green.
-- **In Progress**: None (Phase 3 complete).
-- **Next**: Phase 4: Specialist Agents & MCP Tool Plane (Web Research, SQL Analytics, Data Processing Sandbox, Report Generation via MCP server architecture).
+  - Phases 1, 2, and 3 complete, tested, documented, and pushed to GitHub.
+  - Slice 4.1: MCP Client Protocol & Core Tool Transport Plane ([`libs/mcp_client/`](file:///d:/Projects/AI-Operations-Platform/libs/mcp_client/)) with JSON-RPC 2.0 specifications, Stdio and In-Memory transports, schema validation, tool discovery, governance gate binding, and multi-server routing registry (FR-MCP-1, FR-MCP-2, FR-MCP-7).
+  - 136 unit & integration tests passing with 92% coverage; strict Mypy and Ruff 100% green.
+- **In Progress**: Slice 4.2: Web Research Agent & MCP Server (Tavily/DDG search, SSRF defenses, HTML scraper).
+- **Next**: Slice 4.3 (SQL Analytics Agent & Safe Text-to-SQL MCP Server), Slice 4.4 (Data Processing Agent & Isolated Sandbox), Slice 4.5 (Report Generation Agent & End-to-End Exit Criteria).
 
 ## Known Gaps
-- None. All Phase 3 exit criteria satisfied.
+- None.
