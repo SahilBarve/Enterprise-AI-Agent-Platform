@@ -51,6 +51,7 @@ from libs.common.errors import AppError
 from libs.common.health import HealthCheckRegistry
 from libs.common.logging import configure_logging, get_logger
 from libs.common.telemetry import CorrelationIdMiddleware, setup_telemetry
+from services.gateway.orchestrator_router import router as orchestrator_router
 from services.gateway.rag_router import router as rag_router
 
 logger = get_logger("gateway")
@@ -180,6 +181,7 @@ def create_gateway_app(settings: PlatformSettings | None = None) -> FastAPI:
 
     # Register domain routers
     app.include_router(rag_router)
+    app.include_router(orchestrator_router, prefix=active_settings.API_V1_PREFIX)
 
     return app
 

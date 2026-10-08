@@ -39,7 +39,15 @@ from typing import Annotated
 from fastapi import Depends
 from qdrant_client import QdrantClient
 
-from libs.common.config import PlatformSettings, get_settings
+from libs.agents.checkpointer import (
+    MemoryPlatformCheckpointer,
+    PlatformCheckpointer,
+    SQLPlatformCheckpointer,
+)
+from libs.agents.supervisor import MultiAgentSupervisor
+from libs.common.config import get_settings
+from libs.guardrails.governance import GovernanceGate
+from libs.guardrails.tokens import ApprovalTokenManager
 from libs.llm.provider import LLMProvider, MockLLMProvider
 from libs.retrieval.cache import SemanticCache
 from libs.retrieval.citations import CitationEngine
@@ -54,12 +62,13 @@ from libs.retrieval.sparse import BM25SparseEncoder
 
 
 @lru_cache
-def get_qdrant_client(settings: Annotated[PlatformSettings, Depends(get_settings)]) -> QdrantClient:
+def get_qdrant_client() -> QdrantClient:
     """Provide Qdrant client instance (in-memory for tests, HTTP for production).
 
     When running in CI or test suites (`settings.is_testing = True`), Qdrant runs
     in-memory without requiring a live Qdrant container, keeping unit tests blazing fast.
     """
+    settings = get_settings()
     if settings.is_testing:
         return QdrantClient(location=":memory:")
     return QdrantClient(
@@ -176,4 +185,42 @@ def get_rag_generator(
         cache=cache,
         compressor=compressor,
         crag_router=crag_router,
+    )
+
+
+@lru_cache
+def get_token_manager() -> ApprovalTokenManager:
+    """Provide singleton instance of the cryptographic approval token manager (FR-OR-6)."""
+    settings = get_settings()
+    return ApprovalTokenManager(secret_key=settings.APPROVAL_TOKEN_SECRET)
+
+
+@lru_cache
+def get_governance_gate() -> GovernanceGate:
+    """Provide singleton instance of the risk-tiered governance policy gate."""
+    token_manager = get_token_manager()
+    return GovernanceGate(token_manager=token_manager)
+
+
+@lru_cache
+def get_checkpointer() -> PlatformCheckpointer:
+    """Provide persistent checkpointer instance (in-memory for tests, SQL for production)."""
+    settings = get_settings()
+    if settings.is_testing:
+        return MemoryPlatformCheckpointer()
+    return SQLPlatformCheckpointer(db_url="sqlite:///checkpoints.db")
+
+
+def get_supervisor(
+    governance_gate: Annotated[GovernanceGate, Depends(get_governance_gate)],
+    checkpointer: Annotated[PlatformCheckpointer, Depends(get_checkpointer)],
+    llm_provider: Annotated[LLMProvider, Depends(get_llm_provider)],
+    rag_generator: Annotated[RAGGenerator, Depends(get_rag_generator)],
+) -> MultiAgentSupervisor:
+    """Provide instance of the LangGraph MultiAgentSupervisor coordinator."""
+    return MultiAgentSupervisor(
+        governance_gate=governance_gate,
+        checkpointer=checkpointer,
+        llm_provider=llm_provider,
+        rag_generator=rag_generator,
     )

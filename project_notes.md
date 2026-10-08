@@ -1686,3 +1686,124 @@ Even if an attacker intercepts an approval token for `send_webhook {"amount": 50
    .\.venv\Scripts\mypy.exe libs/agents tests/unit/test_supervisor.py
    ```
    *Expected output*: All checks passed across 5 source files.
+
+
+---
+
+## [2026-10-07] Phase 3 (Slice 3.4) — Orchestrator API Gateway, Durable Relational Checkpointing & Cross-Worker Crash Recovery (Phase 3 Complete)
+
+### (a) What was done
+1. **Orchestrator REST & SSE Streaming API Gateway ([`services/gateway/orchestrator_router.py`](file:///d:/Projects/AI-Operations-Platform/services/gateway/orchestrator_router.py))**:
+   - `POST /api/v1/runs`: Decomposes high-level objectives, initializes budget guards, invokes the supervisor graph, and returns structured `RunResponse` (FR-OR-1, FR-GW-1).
+   - `GET /api/v1/runs/{id}`: Returns real-time or completed run status, active step, plan progress, and token usage (FR-OR-9).
+   - `GET /api/v1/runs/{id}/events`: Supports both polling JSON list and real-time Server-Sent Events (SSE) streaming (`?stream=true`) yielding formatted timeline updates (`run_queued`, `step_started`, `approval_required`, `step_completed`) (FR-GW-6).
+   - `POST /api/v1/runs/{id}/approve`: Validates human operator decision; upon sign-off, generates an HMAC-SHA256 signed single-use approval token bound to exact arguments and resumes execution; upon rejection, transitions run status to `CANCELLED` (FR-OR-6, P0 Pillar).
+   - `GET /api/v1/runs/{id}/checkpoints`: Lists chronological state snapshots for time-travel inspection (FR-OR-10).
+   - `POST /api/v1/runs/{id}/fork`: Branches a new execution run from any historical checkpoint with state overrides, enabling live root-cause debugging without mutating the original run (FR-OR-10).
+2. **Durable Relational LangGraph CheckpointSaver ([`libs/agents/checkpointer.py`](file:///d:/Projects/AI-Operations-Platform/libs/agents/checkpointer.py))**:
+   - Built `SQLCheckpointSaver(BaseCheckpointSaver[str])` backed by SQLAlchemy relational tables (`lg_checkpoints`, `lg_blobs`, `lg_writes`).
+   - Handles LangGraph channel state serialization/deserialization via `serde.dumps_typed` and `serde.loads_typed`.
+   - Wired `SQLCheckpointSaver` into `SQLPlatformCheckpointer.to_langgraph_saver()`, replacing ephemeral in-memory state with durable relational database storage (SQLite locally/tests, PostgreSQL in production).
+3. **Rigorous Phase 3 Exit Criteria Verification ([`tests/unit/test_crash_recovery.py`](file:///d:/Projects/AI-Operations-Platform/tests/unit/test_crash_recovery.py))**:
+   - Simulated catastrophic worker termination: Worker Pod 1 starts a multi-step run -> halts at Tier 2 mutation (`run_sql_write`) with persisted `interrupt()` -> Worker 1 engine disposed and memory freed.
+   - Replacement Worker Pod 2 boots with clean memory -> reloads the thread from the database -> receives signed approval token from operator -> resumes execution from the exact interrupted step -> completes all plan steps without re-running prior steps or losing state.
+4. **Gateway Orchestrator Unit Test Suite ([`tests/unit/test_gateway_runs.py`](file:///d:/Projects/AI-Operations-Platform/tests/unit/test_gateway_runs.py))**:
+   - Verified autonomous runs, timeline SSE streaming, HITL approval resume, operator cancellation, checkpoint listing, and time-travel forking.
+5. **Quality & Test Coverage Metrics**:
+   - Total test count expanded to **128 tests** (100% passing).
+   - Overall codebase coverage across `libs`, `evals`, and `services` stands at **92%**.
+   - Mypy strict (67 source files) and Ruff linting 100% clean.
+
+---
+
+### (b) Why we chose this approach
+- **Cross-Pod Crash Resiliency**: In distributed Kubernetes architectures, worker pods can be evicted or restarted by spot node termination, horizontal auto-scalers, or out-of-memory errors. Checkpointing every graph transition directly into the database guarantees that no customer workflow is lost when a container dies.
+- **Asynchronous Human Review**: An operator approving a database schema change or sensitive customer report may take minutes, hours, or days. Keeping an active Python process running in memory during that wait wastes cluster resources and risks data loss during pod restarts. Persisting the interrupt allows the worker to release memory and safely shut down.
+- **Server-Sent Events (SSE) for Run Timelines**: Unlike WebSockets, SSE operates over standard HTTP/1.1 or HTTP/2, requires no bidirectional connection handshake, works natively with corporate proxies and firewalls, and automatically reconnects if the network blips.
+
+---
+
+### (c) Alternatives considered and why rejected
+- **Relying solely on `InMemorySaver`**:
+  - *Why rejected*: `InMemorySaver` stores states in a Python dictionary. Any worker restart destroys the thread, failing the fundamental enterprise requirement for persistent crash recovery.
+- **WebSockets for run updates**:
+  - *Why rejected*: Overkill for read-only timeline event streaming. WebSockets add protocol overhead, stateful connection load balancers, and complex reconnection negotiation. SSE provides clean unidirectional streaming using standard HTTP.
+- **Celery/Temporal instead of LangGraph checkpointers**:
+  - *Why rejected*: Adding an external orchestration engine increases operational footprint and complicates multi-agent cyclic reasoning. LangGraph with persistent checkpointers gives us fine-grained agent DAG control while retaining stateful durability.
+
+---
+
+### (d) Trade-offs and risks
+- **SQLite vs PostgreSQL Concurrency**:
+  - SQLite locks the entire database file during writes, which can cause contention under heavy concurrent unit tests.
+  - *Mitigation*: We wrapped database transactions in a `threading.Lock()` and used short-lived SQLite sessions for local development/tests. In production, PostgreSQL provides row-level locking (MVCC) for high throughput.
+- **Pydantic Model Hashability with `@lru_cache`**:
+  - FastAPI dependency providers decorated with `@lru_cache` raise `TypeError: unhashable type: 'PlatformSettings'` if they accept unhashable Pydantic settings instances as arguments.
+  - *Mitigation*: Providers call `get_settings()` internally and accept zero arguments, keeping singletons thread-safe and cached.
+
+---
+
+### (e) Non-trivial concepts explained simply
+
+#### 1. How LangGraph Checkpoints Relational State Across Pod Crashes
+```
+ Worker Pod 1                                      Database (PostgreSQL / SQLite)
+┌───────────────────────┐                         ┌─────────────────────────────────┐
+│ Run Step 1 (Planner)  │ ── saves checkpoint ──> │ lg_checkpoints (thread_id, ...) │
+│                       │                         │ lg_blobs       (channel values) │
+│ Run Step 2 (SQL Write)│                         │ lg_writes      (pending writes) │
+│ - interrupt() triggered│ ── persists pause ────> │                                 │
+└───────────────────────┘                         └─────────────────────────────────┘
+          │ (POD 1 DIES / ENGINE DISPOSED)                         │
+          ▼                                                        │
+ Worker Pod 2 (Replacement)                                       │
+┌───────────────────────┐                                          │
+│ Boot with clean RAM   │                                          │
+│ Operator submits token│                                          │
+│ resume_run(run_id)    │ ── fetches tuple ───────>                │
+│ Rebuilds state & graph│ <── loads blobs & writes ────────────────┘
+│ Executes step 2 -> end│
+│ status: COMPLETED     │
+└───────────────────────┘
+```
+
+#### 2. The 3 Tables Powering Durable Checkpointing
+1. `lg_checkpoints`: Tracks the root snapshot metadata (`thread_id`, `checkpoint_ns`, `checkpoint_id`, `parent_checkpoint_id`, and serialized graph metadata).
+2. `lg_blobs`: Stores individual channel values across versions (`thread_id`, `channel`, `version`, `blob_data`). This allows LangGraph to store deltas rather than copying entire memory buffers on every step.
+3. `lg_writes`: Records pending task writes emitted by nodes that were interrupted or executed (`task_id`, `idx`, `channel`, `write_data`). When resuming, LangGraph applies these pending writes to continue execution seamlessly.
+
+---
+
+### ADR-010: Persistent Relational CheckpointSaver for Cross-Pod Crash Resiliency
+
+- **Status**: Accepted
+- **Context**: PRD P0 requirements dictate that multi-agent runs must survive worker crashes and long-running human approval pauses. LangGraph's default `InMemorySaver` is non-durable and loses all state on process exit.
+- **Decision**: Implemented `SQLCheckpointSaver(BaseCheckpointSaver[str])` using SQLAlchemy tables (`lg_checkpoints`, `lg_blobs`, `lg_writes`). Wired this directly into `SQLPlatformCheckpointer.to_langgraph_saver()`.
+- **Consequences**:
+  - *Pros*: Multi-step runs can be started on Worker A, paused indefinitely for human sign-off, and resumed on Worker B after a crash without state loss.
+  - *Cons*: Every graph transition executes database write transactions, requiring connection pooling and proper indexing on `(thread_id, checkpoint_ns, checkpoint_id)`.
+
+---
+
+### (f) How to verify it works
+1. Run Phase 3 Exit Criteria crash recovery verification:
+   ```bash
+   .\.venv\Scripts\pytest.exe tests/unit/test_crash_recovery.py -v
+   ```
+   *Expected output*: `test_multi_step_run_resumes_after_crash PASSED` in <2s.
+2. Run Gateway Orchestrator API test suite:
+   ```bash
+   .\.venv\Scripts\pytest.exe tests/unit/test_gateway_runs.py -v
+   ```
+   *Expected output*: 5 passed in <8s.
+3. Run the full platform test suite with code coverage:
+   ```bash
+   .\.venv\Scripts\pytest.exe --cov=libs --cov=evals --cov=services -v
+   ```
+   *Expected output*: 128 passed, 92% coverage across 2,600+ statements.
+4. Run static linting and strict type checking:
+   ```bash
+   .\.venv\Scripts\ruff.exe check .
+   .\.venv\Scripts\mypy.exe libs services evals tests
+   ```
+   *Expected output*: Zero issues found across 67 source files.

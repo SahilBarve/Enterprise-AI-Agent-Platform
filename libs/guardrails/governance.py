@@ -62,6 +62,7 @@ DEFAULT_ACTION_TIERS: dict[str, ActionRiskTier] = {
     "execute_code_sandbox": ActionRiskTier.TIER_1_LOW_RISK,
     "transform_dataset": ActionRiskTier.TIER_1_LOW_RISK,
     "draft_report": ActionRiskTier.TIER_1_LOW_RISK,
+    "generate_report": ActionRiskTier.TIER_1_LOW_RISK,
     # Tier 2: High-Risk Mutations (Mandatory Token Required)
     "run_sql_write": ActionRiskTier.TIER_2_HIGH_RISK,
     "execute_code": ActionRiskTier.TIER_2_HIGH_RISK,

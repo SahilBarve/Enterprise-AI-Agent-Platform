@@ -57,6 +57,9 @@ postgres-data/
 redis-data/
 rabbitmq-data/
 *.log
+*.db
+*.db-*
+*.sqlite
 
 # OS
 .DS_Store

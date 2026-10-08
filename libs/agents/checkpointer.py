@@ -21,24 +21,40 @@ Architectural Concepts Explained:
 """
 
 import json
+import random
+import threading
 from abc import ABC, abstractmethod
+from collections.abc import AsyncIterator, Iterator, Sequence
 from copy import deepcopy
 from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
-from langgraph.checkpoint.base import BaseCheckpointSaver
+from langchain_core.runnables import RunnableConfig
+from langgraph.checkpoint.base import (
+    WRITES_IDX_MAP,
+    BaseCheckpointSaver,
+    ChannelVersions,
+    Checkpoint,
+    CheckpointMetadata,
+    CheckpointTuple,
+    get_checkpoint_id,
+    get_checkpoint_metadata,
+)
 from langgraph.checkpoint.memory import InMemorySaver
 from pydantic import BaseModel, Field
 from sqlalchemy import (
     Column,
     DateTime,
     Index,
+    Integer,
+    LargeBinary,
     MetaData,
     String,
     Table,
     Text,
     create_engine,
+    delete,
     select,
 )
 
@@ -211,6 +227,369 @@ class MemoryPlatformCheckpointer(PlatformCheckpointer):
 
 
 # =============================================================================
+# SQLCheckpointSaver (Durable LangGraph CheckpointSaver) (FR-OR-5)
+# =============================================================================
+
+
+class SQLCheckpointSaver(BaseCheckpointSaver[str]):
+    """Thread-safe, durable relational database checkpoint saver for LangGraph (FR-OR-5).
+
+    Persists graph step snapshots, delta channel versions, and pending task writes into
+    relational tables (SQLite / PostgreSQL), enabling seamless multi-step resume across
+    worker crashes and human-in-the-loop pauses.
+    """
+
+    def __init__(self, engine: Any) -> None:
+        """Initialize schema tables and synchronization primitives.
+
+        Args:
+            engine: SQLAlchemy database engine.
+        """
+        super().__init__()
+        self.engine = engine
+        self.lock = threading.Lock()
+        self.metadata = MetaData()
+
+        self.t_checkpoints = Table(
+            "lg_checkpoints",
+            self.metadata,
+            Column("thread_id", String(128), primary_key=True),
+            Column("checkpoint_ns", String(128), primary_key=True),
+            Column("checkpoint_id", String(128), primary_key=True),
+            Column("parent_checkpoint_id", String(128), nullable=True),
+            Column("cp_type", String(64), nullable=False),
+            Column("cp_data", LargeBinary, nullable=False),
+            Column("meta_type", String(64), nullable=False),
+            Column("meta_data", LargeBinary, nullable=False),
+        )
+
+        self.t_blobs = Table(
+            "lg_blobs",
+            self.metadata,
+            Column("thread_id", String(128), primary_key=True),
+            Column("checkpoint_ns", String(128), primary_key=True),
+            Column("channel", String(128), primary_key=True),
+            Column("version", String(128), primary_key=True),
+            Column("blob_type", String(64), nullable=False),
+            Column("blob_data", LargeBinary, nullable=False),
+        )
+
+        self.t_writes = Table(
+            "lg_writes",
+            self.metadata,
+            Column("thread_id", String(128), primary_key=True),
+            Column("checkpoint_ns", String(128), primary_key=True),
+            Column("checkpoint_id", String(128), primary_key=True),
+            Column("task_id", String(128), primary_key=True),
+            Column("idx", Integer, primary_key=True),
+            Column("channel", String(128), nullable=False),
+            Column("write_type", String(64), nullable=False),
+            Column("write_data", LargeBinary, nullable=False),
+            Column("task_path", String(256), nullable=False, default=""),
+        )
+        self.metadata.create_all(self.engine)
+
+    def _load_blobs(
+        self,
+        thread_id: str,
+        checkpoint_ns: str,
+        versions: ChannelVersions,
+    ) -> dict[str, Any]:
+        """Load and deserialize channel blobs for a specific checkpoint version."""
+        result: dict[str, Any] = {}
+        with self.engine.connect() as conn:
+            for k, ver in versions.items():
+                s = select(self.t_blobs.c.blob_type, self.t_blobs.c.blob_data).where(
+                    self.t_blobs.c.thread_id == thread_id,
+                    self.t_blobs.c.checkpoint_ns == checkpoint_ns,
+                    self.t_blobs.c.channel == k,
+                    self.t_blobs.c.version == str(ver),
+                )
+                row = conn.execute(s).fetchone()
+                if row:
+                    b_type, b_data = row
+                    if b_type != "empty":
+                        result[k] = self.serde.loads_typed((b_type, b_data))
+        return result
+
+    def get_tuple(self, config: RunnableConfig) -> CheckpointTuple | None:
+        """Fetch checkpoint tuple for given thread_id and optional checkpoint_id."""
+        thread_id: str = config["configurable"]["thread_id"]
+        checkpoint_ns: str = config["configurable"].get("checkpoint_ns", "")
+        checkpoint_id = get_checkpoint_id(config)
+
+        with self.engine.connect() as conn:
+            if checkpoint_id:
+                s = select(self.t_checkpoints).where(
+                    self.t_checkpoints.c.thread_id == thread_id,
+                    self.t_checkpoints.c.checkpoint_ns == checkpoint_ns,
+                    self.t_checkpoints.c.checkpoint_id == checkpoint_id,
+                )
+                row = conn.execute(s).fetchone()
+            else:
+                s = select(self.t_checkpoints).where(
+                    self.t_checkpoints.c.thread_id == thread_id,
+                    self.t_checkpoints.c.checkpoint_ns == checkpoint_ns,
+                ).order_by(self.t_checkpoints.c.checkpoint_id.desc()).limit(1)
+                row = conn.execute(s).fetchone()
+
+            if not row:
+                return None
+
+            t_id, ns, c_id, parent_id, cp_t, cp_d, m_t, m_d = row
+            cp_dict: Checkpoint = self.serde.loads_typed((cp_t, cp_d))
+            meta_dict = self.serde.loads_typed((m_t, m_d))
+
+            sw = select(self.t_writes).where(
+                self.t_writes.c.thread_id == thread_id,
+                self.t_writes.c.checkpoint_ns == checkpoint_ns,
+                self.t_writes.c.checkpoint_id == c_id,
+            )
+            w_rows = conn.execute(sw).fetchall()
+            pending_writes = [
+                (w[3], w[5], self.serde.loads_typed((w[6], w[7]))) for w in w_rows
+            ]
+
+            return CheckpointTuple(
+                config={
+                    "configurable": {
+                        "thread_id": thread_id,
+                        "checkpoint_ns": checkpoint_ns,
+                        "checkpoint_id": c_id,
+                    }
+                },
+                checkpoint={
+                    **cp_dict,
+                    "channel_values": self._load_blobs(
+                        thread_id, checkpoint_ns, cp_dict["channel_versions"]
+                    ),
+                },
+                metadata=meta_dict,
+                pending_writes=pending_writes,
+                parent_config=(
+                    {
+                        "configurable": {
+                            "thread_id": thread_id,
+                            "checkpoint_ns": checkpoint_ns,
+                            "checkpoint_id": parent_id,
+                        }
+                    }
+                    if parent_id
+                    else None
+                ),
+            )
+
+    def put(
+        self,
+        config: RunnableConfig,
+        checkpoint: Checkpoint,
+        metadata: CheckpointMetadata,
+        new_versions: ChannelVersions,
+    ) -> RunnableConfig:
+        """Persist a new checkpoint snapshot and channel versions to the database."""
+        c = checkpoint.copy()
+        thread_id = config["configurable"]["thread_id"]
+        checkpoint_ns = config["configurable"].get("checkpoint_ns", "")
+        values: dict[str, Any] = c.pop("channel_values")  # type: ignore[misc]
+        cp_type, cp_data = self.serde.dumps_typed(c)
+        meta_type, meta_data = self.serde.dumps_typed(get_checkpoint_metadata(config, metadata))
+        parent_id = config["configurable"].get("checkpoint_id")
+
+        with self.lock, self.engine.begin() as conn:
+            for k, v in new_versions.items():
+                if k in values:
+                    b_type, b_data = self.serde.dumps_typed(values[k])
+                else:
+                    b_type, b_data = ("empty", b"")
+
+                conn.execute(
+                    delete(self.t_blobs).where(
+                        self.t_blobs.c.thread_id == thread_id,
+                        self.t_blobs.c.checkpoint_ns == checkpoint_ns,
+                        self.t_blobs.c.channel == k,
+                        self.t_blobs.c.version == str(v),
+                    )
+                )
+                conn.execute(
+                    self.t_blobs.insert().values(
+                        thread_id=thread_id,
+                        checkpoint_ns=checkpoint_ns,
+                        channel=k,
+                        version=str(v),
+                        blob_type=b_type,
+                        blob_data=b_data,
+                    )
+                )
+
+            conn.execute(
+                delete(self.t_checkpoints).where(
+                    self.t_checkpoints.c.thread_id == thread_id,
+                    self.t_checkpoints.c.checkpoint_ns == checkpoint_ns,
+                    self.t_checkpoints.c.checkpoint_id == checkpoint["id"],
+                )
+            )
+            conn.execute(
+                self.t_checkpoints.insert().values(
+                    thread_id=thread_id,
+                    checkpoint_ns=checkpoint_ns,
+                    checkpoint_id=checkpoint["id"],
+                    parent_checkpoint_id=parent_id,
+                    cp_type=cp_type,
+                    cp_data=cp_data,
+                    meta_type=meta_type,
+                    meta_data=meta_data,
+                )
+            )
+
+        return {
+            "configurable": {
+                "thread_id": thread_id,
+                "checkpoint_ns": checkpoint_ns,
+                "checkpoint_id": checkpoint["id"],
+            }
+        }
+
+    def put_writes(
+        self,
+        config: RunnableConfig,
+        writes: Sequence[tuple[str, Any]],
+        task_id: str,
+        task_path: str = "",
+    ) -> None:
+        """Persist pending node writes associated with an interrupted or completed step."""
+        thread_id = config["configurable"]["thread_id"]
+        checkpoint_ns = config["configurable"].get("checkpoint_ns", "")
+        checkpoint_id = config["configurable"]["checkpoint_id"]
+
+        with self.lock, self.engine.begin() as conn:
+            for idx, (c, v) in enumerate(writes):
+                idx_val = WRITES_IDX_MAP.get(c, idx)
+                w_type, w_data = self.serde.dumps_typed(v)
+
+                conn.execute(
+                    delete(self.t_writes).where(
+                        self.t_writes.c.thread_id == thread_id,
+                        self.t_writes.c.checkpoint_ns == checkpoint_ns,
+                        self.t_writes.c.checkpoint_id == checkpoint_id,
+                        self.t_writes.c.task_id == task_id,
+                        self.t_writes.c.idx == idx_val,
+                    )
+                )
+                conn.execute(
+                    self.t_writes.insert().values(
+                        thread_id=thread_id,
+                        checkpoint_ns=checkpoint_ns,
+                        checkpoint_id=checkpoint_id,
+                        task_id=task_id,
+                        idx=idx_val,
+                        channel=c,
+                        write_type=w_type,
+                        write_data=w_data,
+                        task_path=task_path,
+                    )
+                )
+
+    def list(
+        self,
+        config: RunnableConfig | None,
+        *,
+        filter: dict[str, Any] | None = None,  # noqa: ARG002
+        before: RunnableConfig | None = None,  # noqa: ARG002
+        limit: int | None = None,
+    ) -> Iterator[CheckpointTuple]:
+        """List historical checkpoint tuples for time-travel inspection."""
+        if not config:
+            return
+        thread_id = config["configurable"]["thread_id"]
+        checkpoint_ns = config["configurable"].get("checkpoint_ns", "")
+
+        with self.engine.connect() as conn:
+            s = select(self.t_checkpoints).where(
+                self.t_checkpoints.c.thread_id == thread_id,
+                self.t_checkpoints.c.checkpoint_ns == checkpoint_ns,
+            ).order_by(self.t_checkpoints.c.checkpoint_id.desc())
+            rows = conn.execute(s).fetchall()
+            if limit is not None and limit > 0:
+                rows = rows[:limit]
+
+            for r in rows:
+                c_id = r[2]
+                tup = self.get_tuple(
+                    {
+                        "configurable": {
+                            "thread_id": thread_id,
+                            "checkpoint_ns": checkpoint_ns,
+                            "checkpoint_id": c_id,
+                        }
+                    }
+                )
+                if tup:
+                    yield tup
+
+    def delete_thread(self, thread_id: str) -> None:
+        """Purge all checkpoints, blobs, and writes for a given thread ID."""
+        with self.lock, self.engine.begin() as conn:
+            conn.execute(
+                delete(self.t_checkpoints).where(
+                    self.t_checkpoints.c.thread_id == thread_id
+                )
+            )
+            conn.execute(
+                delete(self.t_blobs).where(self.t_blobs.c.thread_id == thread_id)
+            )
+            conn.execute(
+                delete(self.t_writes).where(self.t_writes.c.thread_id == thread_id)
+            )
+
+    def get_next_version(self, current: str | None, channel: None = None) -> str:  # noqa: ARG002
+        """Calculate next monotonic channel version identifier."""
+        if current is None:
+            current_v = 0
+        elif isinstance(current, int):
+            current_v = current
+        else:
+            current_v = int(current.split(".")[0])
+        next_v = current_v + 1
+        next_h = random.random()
+        return f"{next_v:032}.{next_h:016}"
+
+    async def aget_tuple(self, config: RunnableConfig) -> CheckpointTuple | None:
+        return self.get_tuple(config)
+
+    async def alist(
+        self,
+        config: RunnableConfig | None,
+        *,
+        filter: dict[str, Any] | None = None,
+        before: RunnableConfig | None = None,
+        limit: int | None = None,
+    ) -> AsyncIterator[CheckpointTuple]:
+        for item in self.list(config, filter=filter, before=before, limit=limit):
+            yield item
+
+    async def aput(
+        self,
+        config: RunnableConfig,
+        checkpoint: Checkpoint,
+        metadata: CheckpointMetadata,
+        new_versions: ChannelVersions,
+    ) -> RunnableConfig:
+        return self.put(config, checkpoint, metadata, new_versions)
+
+    async def aput_writes(
+        self,
+        config: RunnableConfig,
+        writes: Sequence[tuple[str, Any]],
+        task_id: str,
+        task_path: str = "",
+    ) -> None:
+        return self.put_writes(config, writes, task_id, task_path)
+
+    async def adelete_thread(self, thread_id: str) -> None:
+        return self.delete_thread(thread_id)
+
+
+# =============================================================================
 # SQLPlatformCheckpointer (SQLAlchemy SQLite / PostgreSQL backend) (FR-OR-5)
 # =============================================================================
 
@@ -244,7 +623,7 @@ class SQLPlatformCheckpointer(PlatformCheckpointer):
             Index("idx_run_created", "run_id", "created_at"),
         )
         self.metadata.create_all(self.engine)
-        self._langgraph_saver = InMemorySaver()
+        self._langgraph_saver = SQLCheckpointSaver(self.engine)
 
     def _serialize(self, obj: Any) -> str:
         """Safe JSON serializer handling datetime, UUID, and custom objects."""
