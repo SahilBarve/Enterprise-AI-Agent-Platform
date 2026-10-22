@@ -13,6 +13,7 @@ from libs.agents.checkpointer import (
     PlatformCheckpointer,
     SQLPlatformCheckpointer,
 )
+from libs.agents.sql_analytics import SQLAnalyticsAgent, SQLAnalyticsResult
 from libs.agents.state import (
     AgentState,
     AgentType,
@@ -44,6 +45,8 @@ __all__ = [
     "PlanStep",
     "PlatformCheckpointer",
     "RunStatus",
+    "SQLAnalyticsAgent",
+    "SQLAnalyticsResult",
     "SQLPlatformCheckpointer",
     "StepActionType",
     "StepEvent",

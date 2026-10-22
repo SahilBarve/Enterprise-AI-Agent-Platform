@@ -53,14 +53,15 @@ ai-ops-platform/
 - [ ] **Phase 11: Stretch** (Playbooks, Slack bot, chaos tests)
 
 ## Current Status
-- **Phase**: Phase 4 — Specialist Agents & MCP Tool Plane (Slices 4.1 & 4.2 Complete)
+- **Phase**: Phase 4 — Specialist Agents & MCP Tool Plane (Slices 4.1, 4.2 & 4.3 Complete)
 - **Done**:
   - Phases 1, 2, and 3 complete, tested, documented, and pushed to GitHub.
   - Slice 4.1: MCP Client Protocol & Core Tool Transport Plane (`libs/mcp_client/`) with JSON-RPC 2.0 specifications, Stdio and In-Memory transports, schema validation, tool discovery, governance gate binding, and multi-server routing registry (FR-MCP-1, FR-MCP-2, FR-MCP-7).
   - Slice 4.2: Web Research Agent & MCP Server (`services/mcp_servers/web_search/`, `libs/agents/web_research.py`) with Tavily/DDG/Mock search fallback, SSRF DNS-resolution defense, robots.txt politeness, HTML content distillation, indirect prompt-injection sanitization (`<untrusted_web_content>`), TTL caching, source credibility scoring, and contradiction detection (FR-WEB-1 to FR-WEB-8).
-  - 142 unit & integration tests passing with 100% green status; strict Mypy and Ruff clean.
-- **In Progress**: Slice 4.3: SQL Analytics Agent & Safe Text-to-SQL MCP Server (AST validation, safe read/write, dry-run explain).
-- **Next**: Slice 4.4 (Data Processing Agent & Isolated Sandbox), Slice 4.5 (Report Generation Agent & End-to-End Exit Criteria).
+  - Slice 4.3: SQL Analytics Agent & Safe Text-to-SQL MCP Server (`services/mcp_servers/sql/`, `libs/agents/sql_analytics.py`) with AST SQL safety validation, DDL blocking, multi-statement rejection, automatic LIMIT injection/capping, schema introspection & linking, dry-run EXPLAIN, self-correction repair loop, chart recommendations, and Tier 2 write governance enforcement (FR-SQL-1 to FR-SQL-8).
+  - 150 unit & integration tests passing with 100% green status; strict Mypy (88 files) and Ruff clean.
+- **In Progress**: Slice 4.4: Data Processing Agent & Isolated Sandbox MCP Server (pandas/polars profiling, statistical analysis, AST code safety sandbox).
+- **Next**: Slice 4.5 (Report Generation Agent & End-to-End Multi-Agent Exit Criteria).
 
 ## Known Gaps
 - None.
