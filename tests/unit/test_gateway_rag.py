@@ -233,8 +233,6 @@ def test_query_cache_hit_and_invalidation(client: TestClient) -> None:
     assert inv_res.json()["status"] == "invalidated"
 
     # 4. Flush tenant cache endpoint
-    flush_res = client.post(
-        f"/api/v1/tenants/{tenant_id}/cache/flush"
-    )
+    flush_res = client.post(f"/api/v1/tenants/{tenant_id}/cache/flush")
     assert flush_res.status_code == 200
     assert flush_res.json()["status"] == "flushed"

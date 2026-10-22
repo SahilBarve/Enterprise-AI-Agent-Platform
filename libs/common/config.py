@@ -41,9 +41,16 @@ class PlatformSettings(BaseSettings):
     )
 
     # Core environment and runtime flags
-    ENVIRONMENT: str = Field(default="development", description="Runtime environment: development, testing, staging, production")
-    LOG_LEVEL: str = Field(default="INFO", description="Logging verbosity level: DEBUG, INFO, WARNING, ERROR")
-    APP_NAME: str = Field(default="ai-operations-platform", description="Platform application identifier")
+    ENVIRONMENT: str = Field(
+        default="development",
+        description="Runtime environment: development, testing, staging, production",
+    )
+    LOG_LEVEL: str = Field(
+        default="INFO", description="Logging verbosity level: DEBUG, INFO, WARNING, ERROR"
+    )
+    APP_NAME: str = Field(
+        default="ai-operations-platform", description="Platform application identifier"
+    )
 
     # API Gateway configuration
     GATEWAY_HOST: str = Field(default="0.0.0.0", description="Gateway IP address binding")

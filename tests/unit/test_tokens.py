@@ -142,19 +142,31 @@ def test_context_mismatch_detection(token_manager: ApprovalTokenManager) -> None
 
     # Run ID mismatch
     res_run = token_manager.verify_and_consume(
-        token, expected_run_id="run-B", expected_tenant_id="tenant-1", expected_action="run_sql_write", actual_arguments=args
+        token,
+        expected_run_id="run-B",
+        expected_tenant_id="tenant-1",
+        expected_action="run_sql_write",
+        actual_arguments=args,
     )
     assert res_run.error_code == "RUN_ID_MISMATCH"
 
     # Tenant mismatch
     res_tenant = token_manager.verify_and_consume(
-        token, expected_run_id="run-A", expected_tenant_id="tenant-2", expected_action="run_sql_write", actual_arguments=args
+        token,
+        expected_run_id="run-A",
+        expected_tenant_id="tenant-2",
+        expected_action="run_sql_write",
+        actual_arguments=args,
     )
     assert res_tenant.error_code == "TENANT_MISMATCH"
 
     # Action mismatch
     res_act = token_manager.verify_and_consume(
-        token, expected_run_id="run-A", expected_tenant_id="tenant-1", expected_action="send_webhook", actual_arguments=args
+        token,
+        expected_run_id="run-A",
+        expected_tenant_id="tenant-1",
+        expected_action="send_webhook",
+        actual_arguments=args,
     )
     assert res_act.error_code == "ACTION_MISMATCH"
 
@@ -173,7 +185,11 @@ def test_token_expiration(token_manager: ApprovalTokenManager) -> None:
     )
 
     res = token_manager.verify_and_consume(
-        token, expected_run_id="run-exp", expected_tenant_id="tenant-corp", expected_action="publish_report", actual_arguments=args
+        token,
+        expected_run_id="run-exp",
+        expected_tenant_id="tenant-corp",
+        expected_action="publish_report",
+        actual_arguments=args,
     )
     assert res.is_valid is False
     assert res.error_code == "TOKEN_EXPIRED"
@@ -190,9 +206,7 @@ def test_signature_tampering_and_malformed_tokens(token_manager: ApprovalTokenMa
     tampered_sig = sig[:-4] + "AAAA"
     bad_token = f"{payload_b64}.{tampered_sig}"
 
-    res = token_manager.verify_and_consume(
-        bad_token, "run-x", "tenant-x", "action-x", args
-    )
+    res = token_manager.verify_and_consume(bad_token, "run-x", "tenant-x", "action-x", args)
     assert res.is_valid is False
     assert res.error_code == "INVALID_SIGNATURE"
 

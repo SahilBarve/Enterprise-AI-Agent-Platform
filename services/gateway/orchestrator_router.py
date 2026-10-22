@@ -238,7 +238,9 @@ def approve_run(
         logger.info("Human operator rejected run approval", run_id=run_id, action=decision.action)
         # Cancel run
         state["status"] = RunStatus.CANCELLED
-        state["error"] = f"Action '{decision.action}' was rejected by operator ({decision.approver_id})"
+        state["error"] = (
+            f"Action '{decision.action}' was rejected by operator ({decision.approver_id})"
+        )
         supervisor.checkpointer.save_checkpoint(
             run_id=run_id,
             state=dict(state),
@@ -254,7 +256,9 @@ def approve_run(
         arguments=decision.arguments,
     )
 
-    logger.info("Resuming run with operator-issued approval token", run_id=run_id, action=decision.action)
+    logger.info(
+        "Resuming run with operator-issued approval token", run_id=run_id, action=decision.action
+    )
     resumed_state = supervisor.resume_run(run_id=run_id, approval_token=token)
     return _state_to_response(resumed_state)
 

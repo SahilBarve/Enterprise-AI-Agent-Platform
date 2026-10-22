@@ -28,6 +28,7 @@ from libs.agents.state import (
     append_events,
 )
 from libs.agents.supervisor import MultiAgentSupervisor
+from libs.agents.web_research import CitedWebSource, WebResearchAgent, WebResearchResult
 
 __all__ = [
     "AgentState",
@@ -36,6 +37,7 @@ __all__ = [
     "BudgetLimits",
     "BudgetUsage",
     "CheckpointRecord",
+    "CitedWebSource",
     "MemoryPlatformCheckpointer",
     "MultiAgentSupervisor",
     "Plan",
@@ -45,6 +47,8 @@ __all__ = [
     "SQLPlatformCheckpointer",
     "StepActionType",
     "StepEvent",
+    "WebResearchAgent",
+    "WebResearchResult",
     "append_artifacts",
     "append_events",
 ]

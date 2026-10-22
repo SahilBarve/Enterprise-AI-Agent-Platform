@@ -83,9 +83,7 @@ class CitationEngine:
         "insufficient evidence",
     )
 
-    def format_context(
-        self, candidates: list[SearchResult]
-    ) -> tuple[str, list[Citation]]:
+    def format_context(self, candidates: list[SearchResult]) -> tuple[str, list[Citation]]:
         """Format retrieval candidates into numbered prompt blocks and build citation index.
 
         Example Output Prompt Block:

@@ -53,13 +53,14 @@ ai-ops-platform/
 - [ ] **Phase 11: Stretch** (Playbooks, Slack bot, chaos tests)
 
 ## Current Status
-- **Phase**: Phase 4 — Specialist Agents & MCP Tool Plane (Slice 4.1 Complete)
+- **Phase**: Phase 4 — Specialist Agents & MCP Tool Plane (Slices 4.1 & 4.2 Complete)
 - **Done**:
   - Phases 1, 2, and 3 complete, tested, documented, and pushed to GitHub.
-  - Slice 4.1: MCP Client Protocol & Core Tool Transport Plane ([`libs/mcp_client/`](file:///d:/Projects/AI-Operations-Platform/libs/mcp_client/)) with JSON-RPC 2.0 specifications, Stdio and In-Memory transports, schema validation, tool discovery, governance gate binding, and multi-server routing registry (FR-MCP-1, FR-MCP-2, FR-MCP-7).
-  - 136 unit & integration tests passing with 92% coverage; strict Mypy and Ruff 100% green.
-- **In Progress**: Slice 4.2: Web Research Agent & MCP Server (Tavily/DDG search, SSRF defenses, HTML scraper).
-- **Next**: Slice 4.3 (SQL Analytics Agent & Safe Text-to-SQL MCP Server), Slice 4.4 (Data Processing Agent & Isolated Sandbox), Slice 4.5 (Report Generation Agent & End-to-End Exit Criteria).
+  - Slice 4.1: MCP Client Protocol & Core Tool Transport Plane (`libs/mcp_client/`) with JSON-RPC 2.0 specifications, Stdio and In-Memory transports, schema validation, tool discovery, governance gate binding, and multi-server routing registry (FR-MCP-1, FR-MCP-2, FR-MCP-7).
+  - Slice 4.2: Web Research Agent & MCP Server (`services/mcp_servers/web_search/`, `libs/agents/web_research.py`) with Tavily/DDG/Mock search fallback, SSRF DNS-resolution defense, robots.txt politeness, HTML content distillation, indirect prompt-injection sanitization (`<untrusted_web_content>`), TTL caching, source credibility scoring, and contradiction detection (FR-WEB-1 to FR-WEB-8).
+  - 142 unit & integration tests passing with 100% green status; strict Mypy and Ruff clean.
+- **In Progress**: Slice 4.3: SQL Analytics Agent & Safe Text-to-SQL MCP Server (AST validation, safe read/write, dry-run explain).
+- **Next**: Slice 4.4 (Data Processing Agent & Isolated Sandbox), Slice 4.5 (Report Generation Agent & End-to-End Exit Criteria).
 
 ## Known Gaps
 - None.

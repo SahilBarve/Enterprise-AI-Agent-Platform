@@ -94,12 +94,16 @@ def create_mock_mcp_handler() -> InMemoryMCPTransport:
 
             return JSONRPCResponse(
                 id=request.id,
-                error=JSONRPCError(code=MCPErrorCode.METHOD_NOT_FOUND, message=f"Tool '{name}' not found"),
+                error=JSONRPCError(
+                    code=MCPErrorCode.METHOD_NOT_FOUND, message=f"Tool '{name}' not found"
+                ),
             )
 
         return JSONRPCResponse(
             id=request.id,
-            error=JSONRPCError(code=MCPErrorCode.METHOD_NOT_FOUND, message=f"Method '{request.method}' not found"),
+            error=JSONRPCError(
+                code=MCPErrorCode.METHOD_NOT_FOUND, message=f"Method '{request.method}' not found"
+            ),
         )
 
     return InMemoryMCPTransport(handler=handler, server_name="mock-server")

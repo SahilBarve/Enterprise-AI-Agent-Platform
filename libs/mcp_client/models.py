@@ -149,6 +149,4 @@ class MCPToolCallResult(BaseModel):
 
     def get_text_output(self) -> str:
         """Concatenate all text content blocks into a single string."""
-        return "\n".join(
-            block.text for block in self.content if isinstance(block, MCPTextContent)
-        )
+        return "\n".join(block.text for block in self.content if isinstance(block, MCPTextContent))

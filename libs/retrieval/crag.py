@@ -69,10 +69,16 @@ class CRAGConfidence(StrEnum):
 class CRAGDecision(BaseModel):
     """Routing decision emitted by the adaptive retrieval evaluator."""
 
-    confidence: CRAGConfidence = Field(description="Confidence classification: correct, ambiguous, incorrect")
+    confidence: CRAGConfidence = Field(
+        description="Confidence classification: correct, ambiguous, incorrect"
+    )
     score: float = Field(description="Normalized aggregate relevance score [0.0, 1.0]")
-    action: str = Field(description="Recommended action: proceed_generation, rewrite_and_retry, fallback_external")
-    rewritten_query: str | None = Field(default=None, description="Rewritten or expanded query if ambiguous")
+    action: str = Field(
+        description="Recommended action: proceed_generation, rewrite_and_retry, fallback_external"
+    )
+    rewritten_query: str | None = Field(
+        default=None, description="Rewritten or expanded query if ambiguous"
+    )
     rationale: str = Field(description="Human-readable explanation of routing decision")
     metadata: dict[str, Any] = Field(default_factory=dict)
 
@@ -139,9 +145,35 @@ class AdaptiveCRAGRouter:
         # 1. Collective query token coverage across all candidate chunks
         query_words = set(re.findall(r"\w+", query.lower()))
         stopwords = {
-            "how", "do", "does", "did", "and", "or", "what", "which", "who", "whom",
-            "this", "that", "the", "a", "an", "in", "on", "at", "to", "for", "of",
-            "with", "by", "is", "are", "was", "were", "be", "been"
+            "how",
+            "do",
+            "does",
+            "did",
+            "and",
+            "or",
+            "what",
+            "which",
+            "who",
+            "whom",
+            "this",
+            "that",
+            "the",
+            "a",
+            "an",
+            "in",
+            "on",
+            "at",
+            "to",
+            "for",
+            "of",
+            "with",
+            "by",
+            "is",
+            "are",
+            "was",
+            "were",
+            "be",
+            "been",
         }
         informative_query_words = query_words - stopwords or query_words
 

@@ -48,7 +48,9 @@ class MCPTransport(ABC):
     """Abstract base transport for exchanging JSON-RPC 2.0 messages with an MCP server."""
 
     @abstractmethod
-    def send_request(self, request: JSONRPCRequest, timeout_seconds: float = 30.0) -> JSONRPCResponse:
+    def send_request(
+        self, request: JSONRPCRequest, timeout_seconds: float = 30.0
+    ) -> JSONRPCResponse:
         """Send a JSON-RPC request to the MCP server and wait for the response synchronously.
 
         Args:
@@ -109,7 +111,9 @@ class InMemoryMCPTransport(MCPTransport):
         self.is_closed = False
 
     def send_request(
-        self, request: JSONRPCRequest, timeout_seconds: float = 30.0  # noqa: ARG002
+        self,
+        request: JSONRPCRequest,
+        timeout_seconds: float = 30.0,  # noqa: ARG002
     ) -> JSONRPCResponse:
         """Dispatch request directly to handler through JSON serialization cycle."""
         if self.is_closed:
@@ -198,7 +202,9 @@ class StdioMCPTransport(MCPTransport):
             ) from e
 
     def send_request(
-        self, request: JSONRPCRequest, timeout_seconds: float = 30.0  # noqa: ARG002
+        self,
+        request: JSONRPCRequest,
+        timeout_seconds: float = 30.0,  # noqa: ARG002
     ) -> JSONRPCResponse:
         """Write JSON-RPC request to subprocess stdin and read line from stdout."""
         if not self.process or self.process.poll() is not None:

@@ -55,14 +55,28 @@ class DocumentMetadata(BaseModel):
 
     tenant_id: str = Field(description="Mandatory tenant scope for strict multi-tenant isolation")
     collection_id: str = Field(description="Collection identifier (e.g. 'runbooks', 'policies')")
-    title: str = Field(default="Untitled", description="Document title extracted from filename or tags")
-    author: str | None = Field(default=None, description="Document author if present in file metadata")
-    doc_type: str = Field(default="generic", description="File extension or category (pdf, md, txt, csv)")
+    title: str = Field(
+        default="Untitled", description="Document title extracted from filename or tags"
+    )
+    author: str | None = Field(
+        default=None, description="Document author if present in file metadata"
+    )
+    doc_type: str = Field(
+        default="generic", description="File extension or category (pdf, md, txt, csv)"
+    )
     created_at: str | None = Field(default=None, description="Document creation or file timestamp")
-    language: str = Field(default="en", description="Detected language for language-specific tokenization")
-    acl_tags: list[str] = Field(default_factory=list, description="Access control tags for role-based retrieval")
-    source_uri: str | None = Field(default=None, description="S3 or local storage URI for original asset")
-    content_hash: str = Field(description="SHA-256 hash of raw document bytes for deduplication (FR-RAG-7)")
+    language: str = Field(
+        default="en", description="Detected language for language-specific tokenization"
+    )
+    acl_tags: list[str] = Field(
+        default_factory=list, description="Access control tags for role-based retrieval"
+    )
+    source_uri: str | None = Field(
+        default=None, description="S3 or local storage URI for original asset"
+    )
+    content_hash: str = Field(
+        description="SHA-256 hash of raw document bytes for deduplication (FR-RAG-7)"
+    )
     custom_fields: dict[str, Any] = Field(
         default_factory=dict, description="Arbitrary tenant-defined user metadata"
     )

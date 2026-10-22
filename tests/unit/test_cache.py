@@ -39,7 +39,9 @@ def cache() -> SemanticCache:
     )
 
 
-def test_exact_cache_hit_tier_1(cache: SemanticCache, sample_grounded_answer: GroundedAnswer) -> None:
+def test_exact_cache_hit_tier_1(
+    cache: SemanticCache, sample_grounded_answer: GroundedAnswer
+) -> None:
     # 1. Miss initially
     miss = cache.get(
         query="How to configure PgBouncer pooling?",
@@ -69,7 +71,9 @@ def test_exact_cache_hit_tier_1(cache: SemanticCache, sample_grounded_answer: Gr
     assert "PgBouncer should be set" in hit.answer.answer
 
 
-def test_semantic_cache_hit_tier_2(cache: SemanticCache, sample_grounded_answer: GroundedAnswer) -> None:
+def test_semantic_cache_hit_tier_2(
+    cache: SemanticCache, sample_grounded_answer: GroundedAnswer
+) -> None:
     # Seed cache with initial query
     cache.set(
         query="How to configure PgBouncer pooling?",
@@ -90,7 +94,9 @@ def test_semantic_cache_hit_tier_2(cache: SemanticCache, sample_grounded_answer:
     assert hit.answer.confidence_score == 0.95
 
 
-def test_cache_miss_on_dissimilar_query(cache: SemanticCache, sample_grounded_answer: GroundedAnswer) -> None:
+def test_cache_miss_on_dissimilar_query(
+    cache: SemanticCache, sample_grounded_answer: GroundedAnswer
+) -> None:
     cache.set(
         query="How to configure PgBouncer pooling?",
         answer=sample_grounded_answer,
@@ -107,7 +113,9 @@ def test_cache_miss_on_dissimilar_query(cache: SemanticCache, sample_grounded_an
     assert hit is None
 
 
-def test_multi_tenant_isolation(cache: SemanticCache, sample_grounded_answer: GroundedAnswer) -> None:
+def test_multi_tenant_isolation(
+    cache: SemanticCache, sample_grounded_answer: GroundedAnswer
+) -> None:
     # Seed tenant-alpha
     cache.set(
         query="Database failover policy",

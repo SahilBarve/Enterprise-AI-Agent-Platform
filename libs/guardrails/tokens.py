@@ -211,7 +211,9 @@ class ApprovalTokenManager:
         # 3. Check expiration
         now = int(datetime.now(UTC).timestamp())
         if now > payload.expires_at:
-            logger.warning("Approval token expired", token_id=payload.token_id, expired_at=payload.expires_at)
+            logger.warning(
+                "Approval token expired", token_id=payload.token_id, expired_at=payload.expires_at
+            )
             return VerificationResult(
                 is_valid=False,
                 payload=payload,
@@ -262,7 +264,9 @@ class ApprovalTokenManager:
 
         # 6. Single-use check (Anti-Replay)
         if payload.token_id in self._consumed_token_ids:
-            logger.warning("Replay attack detected: token already consumed", token_id=payload.token_id)
+            logger.warning(
+                "Replay attack detected: token already consumed", token_id=payload.token_id
+            )
             return VerificationResult(
                 is_valid=False,
                 payload=payload,

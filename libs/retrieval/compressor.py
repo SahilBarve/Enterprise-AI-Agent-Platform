@@ -204,9 +204,7 @@ class ContextCompressor:
             )
 
         # Step 1: Calculate initial token count
-        initial_tokens = sum(
-            self.estimate_tokens(r.effective_content) for r in results
-        )
+        initial_tokens = sum(self.estimate_tokens(r.effective_content) for r in results)
 
         # Step 2: Sentence-level filtering per chunk (FR-RAG-23)
         compressed_results: list[SearchResult] = []

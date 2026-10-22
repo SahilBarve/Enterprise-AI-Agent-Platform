@@ -105,7 +105,9 @@ class MockLLMProvider:
                 if sline and not sline.startswith("(") and not sline.startswith("Question:"):
                     first_line = sline
                     break
-            grounded_text = first_line if first_line else "the service requires health probes and OpenTelemetry"
+            grounded_text = (
+                first_line if first_line else "the service requires health probes and OpenTelemetry"
+            )
             return LLMResponse(
                 content=f"According to documentation, {grounded_text.rstrip('.')} [1].",
                 prompt_tokens=120,
@@ -138,7 +140,9 @@ class LiteLLMProvider:
       retries against `fallback_model` (e.g. local Ollama instance).
     """
 
-    def __init__(self, model_name: str = "gpt-4o-mini", fallback_model: str | None = "ollama/llama3") -> None:
+    def __init__(
+        self, model_name: str = "gpt-4o-mini", fallback_model: str | None = "ollama/llama3"
+    ) -> None:
         """Initialize provider with primary and fallback model names.
 
         Args:

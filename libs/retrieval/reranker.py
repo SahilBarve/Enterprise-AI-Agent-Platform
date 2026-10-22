@@ -103,15 +103,9 @@ class CrossEncoderReranker:
         phrase_bonus = 0.3 if q_str in c_str else 0.0
 
         # 3. Bigram sequence overlap
-        q_bigrams = {
-            f"{q_tokens[i]}_{q_tokens[i + 1]}" for i in range(len(q_tokens) - 1)
-        }
-        c_bigrams = {
-            f"{c_tokens[i]}_{c_tokens[i + 1]}" for i in range(len(c_tokens) - 1)
-        }
-        bigram_score = (
-            len(q_bigrams & c_bigrams) / len(q_bigrams) if q_bigrams else coverage
-        )
+        q_bigrams = {f"{q_tokens[i]}_{q_tokens[i + 1]}" for i in range(len(q_tokens) - 1)}
+        c_bigrams = {f"{c_tokens[i]}_{c_tokens[i + 1]}" for i in range(len(c_tokens) - 1)}
+        bigram_score = len(q_bigrams & c_bigrams) / len(q_bigrams) if q_bigrams else coverage
 
         # Combined normalized score bounded between [0.0, 1.0]
         raw = 0.45 * coverage + 0.35 * bigram_score + phrase_bonus
@@ -190,7 +184,11 @@ class CrossEncoderReranker:
 
         # 3. Filter by min_score
         valid_candidates = (
-            [c for c in unique_candidates if c.rerank_score is not None and c.rerank_score >= min_score]
+            [
+                c
+                for c in unique_candidates
+                if c.rerank_score is not None and c.rerank_score >= min_score
+            ]
             if min_score is not None
             else list(unique_candidates)
         )
@@ -220,9 +218,7 @@ class CrossEncoderReranker:
             for idx, cand in enumerate(remaining):
                 relevance = cand.rerank_score or 0.0
                 # Maximum similarity to any chunk already picked
-                max_sim = max(
-                    compute_token_jaccard(cand.content, s.content) for s in selected
-                )
+                max_sim = max(compute_token_jaccard(cand.content, s.content) for s in selected)
                 # MMR formula: trade off relevance vs redundancy
                 mmr_score = lambda_val * relevance - (1.0 - lambda_val) * max_sim
 

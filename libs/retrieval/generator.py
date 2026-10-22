@@ -234,14 +234,10 @@ class RAGGenerator:
         # -------------------------------------------------------------
         # Stage 5: Assemble Prompt Context & Invoke LLM
         # -------------------------------------------------------------
-        formatted_context, available_citations = self.citation_engine.format_context(
-            final_chunks
-        )
+        formatted_context, available_citations = self.citation_engine.format_context(final_chunks)
 
         user_content = (
-            f"Sources:\n{formatted_context}\n\n"
-            f"Question: {query}\n\n"
-            "Answer with citations:"
+            f"Sources:\n{formatted_context}\n\nQuestion: {query}\n\nAnswer with citations:"
         )
 
         messages = [

@@ -1412,16 +1412,21 @@ Chunk B and Chunk C are pushed out! The LLM prompt now contains only Chunk A twi
 In LangGraph, state flows from node to node:
 ```python
 # Without a reducer: Node B overwrites Node A's events!
-def node_a(state): return {"events": [Event("step_a")]}
-def node_b(state): return {"events": [Event("step_b")]} # Events is now ONLY [Event("step_b")]!
+def node_a(state):
+    return {"events": [Event("step_a")]}
+
+
+def node_b(state):
+    return {"events": [Event("step_b")]}  # Events is now ONLY [Event("step_b")]!
 ```
 With a reducer function:
 ```python
 def append_events(left: list[Event], right: list[Event]) -> list[Event]:
     return left + right
 
+
 class AgentState(TypedDict):
-    events: Annotated[list[Event], append_events] # Tells LangGraph to use append_events
+    events: Annotated[list[Event], append_events]  # Tells LangGraph to use append_events
 ```
 When Node B returns `{"events": [Event("step_b")]}`, LangGraph invokes `append_events([Event("step_a")], [Event("step_b")])`, preserving the complete audit history!
 
@@ -1923,5 +1928,85 @@ A client executes a tool using `tools/call`:
    ```bash
    .\.venv\Scripts\ruff.exe check libs/mcp_client tests/unit/test_mcp_client.py
    .\.venv\Scripts\mypy.exe libs/mcp_client tests/unit/test_mcp_client.py
+   ```
+   *Expected output*: All checks passed.
+
+
+---
+
+## [2026-10-22] Phase 4 (Slice 4.2) — Web Research Agent & Web Search MCP Server
+
+### (a) What was done
+1. **Web Search & Crawler MCP Server (`services/mcp_servers/web_search/`)**:
+   - `models.py`: Data models for `WebSearchResultItem`, `WebSearchResponse`, and `WebPageFetchResponse` (FR-WEB-1, FR-WEB-6).
+   - `security.py`: Defense-in-depth security layer implementing pre-flight DNS resolution to block SSRF (rejecting loopback, RFC 1918 private IPs, AWS IMDS `169.254.169.254`, and GCP metadata), domain allow/denylists, and indirect prompt-injection sanitization with `<untrusted_web_content>` isolation boundaries (FR-WEB-2, FR-WEB-8).
+   - `crawler.py`: Resilient web page crawler respecting `robots.txt` politeness, handling timeouts/retries, extracting semantic content via BeautifulSoup (`<article>`, `<main>`, `<p>` stripping boilerplates/scripts), and wrapping distilled text in security delimiters (FR-WEB-2, FR-WEB-3, FR-WEB-8).
+   - `providers.py`: Pluggable search providers (`MockSearchProvider` for deterministic testing/offline development, `DuckDuckGoSearchProvider`, `TavilySearchProvider`, and `FallbackSearchProvider` chaining multiple engines with automatic failover) (FR-WEB-1).
+   - `server.py`: `WebSearchMCPServer` exposing JSON-RPC 2.0 tools `web_search` and `web_fetch`, query caching with TTL, and dual stdio / in-memory transport support (FR-MCP-1, FR-MCP-2, FR-WEB-7).
+2. **Specialist Web Research Agent (`libs/agents/web_research.py`)**:
+   - Implemented `WebResearchAgent` consuming tools **exclusively** via `MCPClient` (zero direct scraping imports, satisfying the P0 MCP-first tool plane).
+   - Iterative deep research loop: sub-query formulation -> MCP `web_search` -> source credibility scoring (prioritizing `.edu`, `.gov`, and authoritative technical documentation domains) -> MCP `web_fetch` -> synthesis with structured citations `[Title](URL)` and timestamps -> contradiction detection across conflicting claims (FR-WEB-4, FR-WEB-5, FR-WEB-6).
+3. **Unit Tests & Verification**:
+   - `tests/unit/test_mcp_web_search.py` (4 tests) & `tests/unit/test_web_research_agent.py` (2 tests).
+   - Test suite expanded from 136 to 142 tests (100% passing).
+   - Strict `mypy` (79 source files) and `ruff` pass with 0 errors.
+
+---
+
+### (b) Why we chose this approach
+- **Network Isolation via MCP**: In enterprise clusters, granting general internet access to the supervisor pod creates data exfiltration and credential theft risks. By encapsulating web access inside an independent MCP server, the supervisor has zero external network egress.
+- **DNS-Resolution SSRF Defense**: Checking only the URL string (`http://localhost`) is insufficient because attackers use alternative representations (`http://0177.0.0.1`, DNS rebinding, or private domain aliases). Resolving hostnames via `socket.getaddrinfo()` and validating actual IP addresses against private CIDRs eliminates SSRF bypasses.
+- **Prompt Injection Demarcation**: LLMs treat everything in their context window as instructions unless explicitly instructed otherwise. Neutralizing override directives and wrapping text in `<untrusted_web_content>` tags informs the model that the content is informational data only.
+
+---
+
+### (c) Alternatives considered and why rejected
+- **Importing BeautifulSoup/httpx directly into the agent**:
+  - *Why rejected*: Violates the non-negotiable P0 MCP tool plane requirement. Direct imports couple agent pods to scraping dependencies and bypass centralized governance and network policies.
+- **Single-provider search without fallback**:
+  - *Why rejected*: Search APIs frequently hit rate limits, quotas, or network issues. `FallbackSearchProvider` ensures resilience by falling back to DuckDuckGo or Mock providers without failing the entire run.
+
+---
+
+### (d) Non-trivial concepts explained simply
+
+#### 1. Server-Side Request Forgery (SSRF) in AI Web Crawlers
+When an agent is asked *"Summarize the deployment at 169.254.169.254/latest/meta-data/iam/security-credentials/"*, an unprotected crawler makes a request to the cloud provider's internal metadata endpoint, exposing the temporary IAM credentials of the host node.
+Our defense performs pre-flight resolution:
+```
+Target URL: http://my-internal-host/admin
+    │
+    ▼
+socket.getaddrinfo("my-internal-host") -> 10.0.4.15
+    │
+    ▼
+ipaddress.ip_address("10.0.4.15").is_private == True
+    │
+    ▼
+[BLOCKED]: Resolved IP is in RFC 1918 private network.
+```
+
+#### 2. Source Credibility Scoring & Contradiction Detection
+Search engines rank pages by SEO, not factual authority. When compiling enterprise intelligence:
+- Base credibility is scaled by domain authority (`.gov`, `.edu`, `kubernetes.io`, `github.com` get $+0.15$; personal blogs get $-0.15$).
+- When two authoritative sources present opposing perspectives (e.g., standard guide recommending an approach vs. benchmark report highlighting a scaling bottleneck), the agent surfaces a structured contradiction warning in the executive brief.
+
+---
+
+### (e) How to verify it works
+1. Run web research and crawler tests:
+   ```bash
+   .\.venv\Scripts\pytest.exe tests/unit/test_mcp_web_search.py tests/unit/test_web_research_agent.py -v
+   ```
+   *Expected output*: 6 passed.
+2. Run full test suite:
+   ```bash
+   .\.venv\Scripts\pytest.exe -v
+   ```
+   *Expected output*: 142 passed.
+3. Run linting and type checking:
+   ```bash
+   .\.venv\Scripts\ruff.exe check .
+   .\.venv\Scripts\mypy.exe libs services tests/unit
    ```
    *Expected output*: All checks passed.

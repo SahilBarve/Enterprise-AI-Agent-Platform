@@ -232,7 +232,9 @@ class MCPClient:
                 if err.code == MCPErrorCode.INVALID_PARAMS:
                     raise ValidationError(f"Invalid arguments for tool '{name}': {err.message}")
                 if err.code == MCPErrorCode.UNAUTHORIZED:
-                    raise GovernanceError(f"Unauthorized tool execution: {err.message}", action=name)
+                    raise GovernanceError(
+                        f"Unauthorized tool execution: {err.message}", action=name
+                    )
                 raise ExternalServiceError(
                     f"Tool '{name}' execution failed: {err.message}",
                     service_name=self.server_name,
@@ -315,7 +317,9 @@ class MCPClient:
                 if err.code == MCPErrorCode.INVALID_PARAMS:
                     raise ValidationError(f"Invalid arguments for tool '{name}': {err.message}")
                 if err.code == MCPErrorCode.UNAUTHORIZED:
-                    raise GovernanceError(f"Unauthorized tool execution: {err.message}", action=name)
+                    raise GovernanceError(
+                        f"Unauthorized tool execution: {err.message}", action=name
+                    )
                 raise ExternalServiceError(
                     f"Tool '{name}' execution failed: {err.message}",
                     service_name=self.server_name,

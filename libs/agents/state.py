@@ -160,7 +160,10 @@ class BudgetUsage(BaseModel):
         if self.tokens_used >= limits.max_tokens:
             return True, f"Exceeded maximum tokens ({self.tokens_used} >= {limits.max_tokens})"
         if self.cost_usd >= limits.max_cost_usd:
-            return True, f"Exceeded maximum cost (${self.cost_usd:.2f} >= ${limits.max_cost_usd:.2f})"
+            return (
+                True,
+                f"Exceeded maximum cost (${self.cost_usd:.2f} >= ${limits.max_cost_usd:.2f})",
+            )
 
         elapsed = (datetime.now(UTC) - self.start_time).total_seconds()
         if elapsed >= limits.max_wall_clock_seconds:
@@ -190,7 +193,9 @@ class ApprovalRequest(BaseModel):
     reason: str = Field(description="Explanation of why approval is required")
     risk_tier: int = Field(default=2, description="Policy risk tier (Tier 2 = High-Risk)")
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
-    approved: bool | None = Field(default=None, description="True=approved, False=rejected, None=pending")
+    approved: bool | None = Field(
+        default=None, description="True=approved, False=rejected, None=pending"
+    )
     approved_by: str | None = Field(default=None, description="User ID who submitted decision")
     decision_notes: str | None = Field(default=None, description="Optional reviewer feedback")
     approval_token: str | None = Field(
@@ -238,9 +243,7 @@ def append_artifacts(
     return combined
 
 
-def merge_step_results(
-    left: dict[str, Any] | None, right: dict[str, Any] | None
-) -> dict[str, Any]:
+def merge_step_results(left: dict[str, Any] | None, right: dict[str, Any] | None) -> dict[str, Any]:
     """LangGraph reducer: Merges newly completed step results into the global step result dictionary."""
     combined = dict(left) if left else {}
     if right:

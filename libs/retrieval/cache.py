@@ -194,9 +194,7 @@ class SemanticCache:
         # -------------------------------------------------------------
         # Tier 2: Semantic Similarity Lookup (Embedding Cosine Search)
         # -------------------------------------------------------------
-        candidates = (
-            self._semantic_index.get(tenant_id, {}).get(collection_id, [])
-        )
+        candidates = self._semantic_index.get(tenant_id, {}).get(collection_id, [])
         if not candidates:
             RAG_CACHE_MISSES_TOTAL.labels(tenant_id=tenant_id).inc()
             return None

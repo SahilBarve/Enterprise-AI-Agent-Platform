@@ -77,7 +77,9 @@ class CheckpointRecord(BaseModel):
     )
     step_name: str = Field(description="Name of the node or step that just completed")
     state: dict[str, Any] = Field(description="Serialized AgentState dictionary")
-    metadata: dict[str, Any] = Field(default_factory=dict, description="Diagnostic tags and metrics")
+    metadata: dict[str, Any] = Field(
+        default_factory=dict, description="Diagnostic tags and metrics"
+    )
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(UTC),
         description="UTC creation timestamp",
@@ -327,10 +329,15 @@ class SQLCheckpointSaver(BaseCheckpointSaver[str]):
                 )
                 row = conn.execute(s).fetchone()
             else:
-                s = select(self.t_checkpoints).where(
-                    self.t_checkpoints.c.thread_id == thread_id,
-                    self.t_checkpoints.c.checkpoint_ns == checkpoint_ns,
-                ).order_by(self.t_checkpoints.c.checkpoint_id.desc()).limit(1)
+                s = (
+                    select(self.t_checkpoints)
+                    .where(
+                        self.t_checkpoints.c.thread_id == thread_id,
+                        self.t_checkpoints.c.checkpoint_ns == checkpoint_ns,
+                    )
+                    .order_by(self.t_checkpoints.c.checkpoint_id.desc())
+                    .limit(1)
+                )
                 row = conn.execute(s).fetchone()
 
             if not row:
@@ -346,9 +353,7 @@ class SQLCheckpointSaver(BaseCheckpointSaver[str]):
                 self.t_writes.c.checkpoint_id == c_id,
             )
             w_rows = conn.execute(sw).fetchall()
-            pending_writes = [
-                (w[3], w[5], self.serde.loads_typed((w[6], w[7]))) for w in w_rows
-            ]
+            pending_writes = [(w[3], w[5], self.serde.loads_typed((w[6], w[7]))) for w in w_rows]
 
             return CheckpointTuple(
                 config={
@@ -504,10 +509,14 @@ class SQLCheckpointSaver(BaseCheckpointSaver[str]):
         checkpoint_ns = config["configurable"].get("checkpoint_ns", "")
 
         with self.engine.connect() as conn:
-            s = select(self.t_checkpoints).where(
-                self.t_checkpoints.c.thread_id == thread_id,
-                self.t_checkpoints.c.checkpoint_ns == checkpoint_ns,
-            ).order_by(self.t_checkpoints.c.checkpoint_id.desc())
+            s = (
+                select(self.t_checkpoints)
+                .where(
+                    self.t_checkpoints.c.thread_id == thread_id,
+                    self.t_checkpoints.c.checkpoint_ns == checkpoint_ns,
+                )
+                .order_by(self.t_checkpoints.c.checkpoint_id.desc())
+            )
             rows = conn.execute(s).fetchall()
             if limit is not None and limit > 0:
                 rows = rows[:limit]
@@ -530,16 +539,10 @@ class SQLCheckpointSaver(BaseCheckpointSaver[str]):
         """Purge all checkpoints, blobs, and writes for a given thread ID."""
         with self.lock, self.engine.begin() as conn:
             conn.execute(
-                delete(self.t_checkpoints).where(
-                    self.t_checkpoints.c.thread_id == thread_id
-                )
+                delete(self.t_checkpoints).where(self.t_checkpoints.c.thread_id == thread_id)
             )
-            conn.execute(
-                delete(self.t_blobs).where(self.t_blobs.c.thread_id == thread_id)
-            )
-            conn.execute(
-                delete(self.t_writes).where(self.t_writes.c.thread_id == thread_id)
-            )
+            conn.execute(delete(self.t_blobs).where(self.t_blobs.c.thread_id == thread_id))
+            conn.execute(delete(self.t_writes).where(self.t_writes.c.thread_id == thread_id))
 
     def get_next_version(self, current: str | None, channel: None = None) -> str:  # noqa: ARG002
         """Calculate next monotonic channel version identifier."""
@@ -753,9 +756,7 @@ class SQLPlatformCheckpointer(PlatformCheckpointer):
 
     def delete_checkpoints(self, run_id: str) -> int:
         with self.engine.begin() as conn:
-            result = conn.execute(
-                self._table.delete().where(self._table.c.run_id == run_id)
-            )
+            result = conn.execute(self._table.delete().where(self._table.c.run_id == run_id))
             return int(result.rowcount)
 
     def to_langgraph_saver(self) -> BaseCheckpointSaver[Any]:

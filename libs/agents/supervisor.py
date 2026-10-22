@@ -124,14 +124,21 @@ class MultiAgentSupervisor:
 
         # Heuristic / deterministic step planner
         if "sql" in lower_goal or "database" in lower_goal or "query" in lower_goal:
-            if "update" in lower_goal or "delete" in lower_goal or "alter" in lower_goal or "drop" in lower_goal:
+            if (
+                "update" in lower_goal
+                or "delete" in lower_goal
+                or "alter" in lower_goal
+                or "drop" in lower_goal
+            ):
                 steps.append(
                     PlanStep(
                         title="Execute Database Mutation",
                         description=f"Perform write query for goal: {goal}",
                         agent=AgentType.SQL_ANALYTICS,
                         action_type=StepActionType.RUN_SQL_WRITE,
-                        action_arguments={"sql": "UPDATE settings SET maintenance = true WHERE id = 1;"},
+                        action_arguments={
+                            "sql": "UPDATE settings SET maintenance = true WHERE id = 1;"
+                        },
                     )
                 )
             else:
@@ -145,7 +152,13 @@ class MultiAgentSupervisor:
                     )
                 )
 
-        if "document" in lower_goal or "rag" in lower_goal or "policy" in lower_goal or "architecture" in lower_goal or not steps:
+        if (
+            "document" in lower_goal
+            or "rag" in lower_goal
+            or "policy" in lower_goal
+            or "architecture" in lower_goal
+            or not steps
+        ):
             steps.append(
                 PlanStep(
                     title="Retrieve Relevant Knowledge",
@@ -238,7 +251,9 @@ class MultiAgentSupervisor:
 
         if decision.risk_tier == ActionRiskTier.TIER_3_PROHIBITED:
             err_msg = f"Step '{current_step.title}' blocked: {decision.reason}"
-            logger.error("Tier 3 prohibited action attempted", run_id=run_id, step=current_step.step_id)
+            logger.error(
+                "Tier 3 prohibited action attempted", run_id=run_id, step=current_step.step_id
+            )
             return Command(
                 goto="critic",
                 update={
@@ -341,7 +356,9 @@ class MultiAgentSupervisor:
             result_payload = {
                 "answer": f"Retrieved verified knowledge for: {query}",
                 "confidence_score": 0.95,
-                "citations": [{"source_number": 1, "document_id": "doc-01", "excerpt": "Sample text"}],
+                "citations": [
+                    {"source_number": 1, "document_id": "doc-01", "excerpt": "Sample text"}
+                ],
                 "is_refusal": False,
             }
 
